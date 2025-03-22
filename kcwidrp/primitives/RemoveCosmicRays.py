@@ -72,9 +72,23 @@ class RemoveCosmicRays(BasePrimitive):
             if 'OBJECT' in self.action.args.ccddata.header['IMTYPE']:
                 if self.action.args.ccddata.header['TTIME'] < 300.:
                     sigclip = 10.
+                bcrinmask = None
+                if 'OBJECT' in self.action.args.ccddata.header['IMTYPE']:
+                    if self.action.args.ccddata.header['TTIME'] < 300.:
+                        sigclip = 10.
+                    if (self.config.instrument.bcrmsk == True):
+                        bcrmskName = self.action.args.name.replace('.fits', '_bcrmsk.fits')
+                        if os.path.isfile(f"{self.config.instrument.output_directory}/{bcrmskName}"):
+                            self.logger.info(f'Opening {bcrmskName}')
+                            bcr = fits.open(f"{self.config.instrument.output_directory}/{bcrmskName}")
+                            bcrmsk = bcr[0].data # this is the mask
+                            ind = (bcrmsk == 1)
+                            bcrmsk[ind] = True
+                            bcrmsk[~ind] = False
+                            print('BLUE CR INMASK INPUTTED')
 
-            mask, clean = detect_cosmics(
-                self.action.args.ccddata.data, gain=1.0, readnoise=read_noise,
+                mask, clean = detect_cosmics(
+                self.action.args.ccddata.data, inmask=bcrinmask, gain=1.0, readnoise=read_noise,
                 psffwhm=self.config.instrument.CRR_PSFFWHM,
                 sigclip=sigclip,
                 sigfrac=self.config.instrument.CRR_SIGFRAC,
