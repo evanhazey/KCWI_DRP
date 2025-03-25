@@ -81,10 +81,10 @@ class RemoveCosmicRays(BasePrimitive):
                         if os.path.isfile(f"{self.config.instrument.output_directory}/{bcrmskName}"):
                             self.logger.info(f'Opening {bcrmskName}')
                             bcr = fits.open(f"{self.config.instrument.output_directory}/{bcrmskName}")
-                            bcrmsk = bcr[0].data # this is the mask
-                            ind = (bcrmsk == 1)
-                            bcrmsk[ind] = True
-                            bcrmsk[~ind] = False
+                            bcrinmask = bcr[0].data # this is the mask
+                            ind = (bcrinmask == 1)
+                            bcrinmask[ind] = True
+                            bcrinmask[~ind] = False
                             print('BLUE CR INMASK INPUTTED')
 
                 mask, clean = detect_cosmics(
