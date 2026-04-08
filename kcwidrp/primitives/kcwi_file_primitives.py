@@ -1178,7 +1178,7 @@ def kcwi_fits_writer(ccddata, table=None, output_file=None, output_dir=None,
     Converts float64 data to float32.
 
     Uses object to_hdu() method to generate hdu list and then checks if various
-    extra frames are present (flags, noskysub) and adds them to the hdu list
+    extra frames are present (flags, noskysub, unzapped, zapskymodel) and adds them to the hdu list
     prior to writing out with hdu list writeto() method.
 
     Note:
@@ -1263,6 +1263,47 @@ def kcwi_fits_writer(ccddata, table=None, output_file=None, output_dir=None,
             if k in ccddata.header:
                 fits_noskysub.header[k] = ccddata.header[k]
         hdus_to_save.append(fits_noskysub)
+    
+    # check for unzapped model
+    unzap = getattr(ccddata, "UNZAPPED", None)
+    if unzap is not None:
+        if unzap.dtype == np.float64:
+            logger.debug("Converting UNZAPPED from 64 bits to 32")
+            unzap = unzap.astype(np.float32)
+        fits_unzapped = fits.ImageHDU(unzap, name='UNZAPPED')
+        # Copy over WCS. Could copy over the entire header if desired
+        keys = ['CTYPE1', 'CTYPE2', 'CTYPE3',
+                'CUNIT1', 'CUNIT2', 'CUNIT3',
+                'CNAME1', 'CNAME2', 'CNAME3',                                 
+                'CRVAL1', 'CRVAL2', 'CRVAL3',                            
+                'CRPIX1', 'CRPIX2', 'CRPIX3',                       
+                'CD1_1', 'CD2_1', 'CD1_2',
+                'CD2_2', 'CD3_3']
+        for l in keys:
+            if l in ccddata.header:
+                fits_unzapped.header[l] = ccddata.header[l]
+        hdus_to_save.append(fits_unzapped)
+
+    # check for zap sky model
+    zapskymod = getattr(ccddata, "ZAPSKYMODEL", None)
+    if zapskymod is not None:
+        if zapskymod.dtype == np.float64:
+            logger.debug("Converting ZAPSKYMODEL from 64 bits to 32")
+            zapskymod = zapskymod.astype(np.float32)
+        fits_zapskymodel = fits.ImageHDU(zapskymod, name='ZAPSKYMODEL')
+        # Copy over WCS. Could copy over the entire header if desired
+        keys = ['CTYPE1', 'CTYPE2', 'CTYPE3',
+                'CUNIT1', 'CUNIT2', 'CUNIT3',
+                'CNAME1', 'CNAME2', 'CNAME3',                                 
+                'CRVAL1', 'CRVAL2', 'CRVAL3',                            
+                'CRPIX1', 'CRPIX2', 'CRPIX3',                       
+                'CD1_1', 'CD2_1', 'CD1_2',
+                'CD2_2', 'CD3_3']
+        for m in keys:
+            if m in ccddata.header:
+                fits_zapskymodel.header[m] = ccddata.header[m]
+        hdus_to_save.append(fits_zapskymodel)
+
     logger.info(">>> Saving %d hdus to %s" % (len(hdus_to_save), out_file))
     hdus_to_save.writeto(out_file, overwrite=True)
 

@@ -258,7 +258,10 @@ class Kcwi_pipeline(BasePipeline):
                                       "object_make_cube"),
         "object_make_cube":          ("MakeCube",
                                       "making_cube_started",        # icube
-                                      "object_wavelengthcorr"),
+                                      "object_make_sky3D"),
+        "object_make_sky3D":         ("MakeMasterSky3D",
+                                      "making_3d_sky_started",      #icube, "object_wavelengthcorr"
+                                      None),
         "object_wavelengthcorr":     ("WavelengthCorrections",
                                       "wavelength_correction_started",  # icubew
                                       "object_correct_dar"),

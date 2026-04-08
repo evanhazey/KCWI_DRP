@@ -1,0 +1,18 @@
+kr231110_00051:
+    ### 2D spline and ZAP subtraction instructions ###
+    skip: False
+    offsky: None #THIS KEYWORD SHOULD TRIGGER THE PROCESSING OF THE FRAME IF IT HAS NOT BEEN BEFORE
+    ### 2D bspline sky subtraction instructions ###
+    skymask: kr231110_00051_smsk.fits
+    offsky_mask: kr231110_00052_smsk.fits
+    use_auto_cont: True
+    use_faint_cont: True
+    faint_cont_pos: 10
+    faint_cont_width: 0.5
+    ### ZAP sky subtraction instructions ###
+    zap_skymask: kr231110_00052_zapskymask.fits
+    zap_offsky_mask: kr231110_00052_zapskymask.fits
+    zap_use_auto_cont: True
+    zap_use_faint_cont: True
+    zap_faint_cont_x1y1: 12,13
+    zap_faint_cont_x2y2: 24,24

@@ -21,3 +21,5 @@ selenium
 geckodriver
 firefox
 phantomjs
+regions==0.11
+zap==2.1

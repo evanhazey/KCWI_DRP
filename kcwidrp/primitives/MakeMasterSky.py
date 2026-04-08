@@ -82,6 +82,12 @@ class MakeMasterSky(BaseImg):
                                 "skipping MakeMasterSky")
             return False
 
+        #Check if user wants to run 2D-bspline sky subtraction 
+        if (self.config.instrument.skysubmethod != '2D-bspline') and (self.config.instrument.skysubmethod != '2D-bspline+3D-PCA'):
+            self.logger.warning("User does not want sky subtraction using 2D-bspline, "
+                                "skipping MakeMasterSky")
+            return False
+
         suffix = 'sky'  # self.action.args.new_type.lower()
         ofn = self.action.args.name
         rdir = self.config.instrument.output_directory
