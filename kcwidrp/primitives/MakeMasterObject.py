@@ -68,6 +68,11 @@ class MakeMasterObject(BaseImg):
         nstack = len(combine_list)
         if nstack > 3:
             method = 'average'
+        if self.config.instrument.object_min_nframes_combine_method is not None:
+           if (self.config.instrument.object_min_nframes_combine_method != 'average') and (self.config.instrument.object_min_nframes_combine_method != 'median'):
+            self.logger.warning(f"Invalid combine method given: %s. Choose 'average' or 'median'. Defaulting to %s" % (self.config.instrument.object_min_nframes_combine_method, method))
+           else:
+                method = self.config.instrument.object_min_nframes_combine_method
 
         self.logger.info("Combining Master Object with method %s" % method)
 
@@ -106,9 +111,9 @@ class MakeMasterObject(BaseImg):
                              output_dir=self.config.instrument.output_directory)
             self.context.proctab.update_proctab(frame=stacked, suffix=suffix,
                                                 newtype=args.new_type,
-                                                filename=self.action.args.name) ### HERE
-            # self.action.args.name = mobj_name
-            # self.action.args.name = stacked.header['OFNAME']
+                                                filename=combine_list[0]) ### HERE
+            self.action.args.name = combine_list[0]
+            stacked.header['OFNAME'] = combine_list[0]
         else:
             mobj_name = strip_fname(combine_list[0]) + '_' + suffix + '.fits'
             self.action.args.ccddata.header['IMTYPE'] = args.new_type

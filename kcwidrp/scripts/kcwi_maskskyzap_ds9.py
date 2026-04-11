@@ -46,7 +46,7 @@ def main():
     regfname = sys.argv[2]
 
     # make sure it's an _wlimg image
-    if '_wlimg.fits' not in imfname:
+    if '_zapwlimg.fits' not in imfname:
         print("imagename must be *wlimg.fits image")
         exit()
 
@@ -60,7 +60,7 @@ def main():
         exit()
 
     # create output mask image name
-    outfile = imfname.replace("_wlimg", "_zapsmsk")
+    outfile = imfname.replace("_zapwlimg", "_zapsmsk")
     print("Creating: "+outfile)
 
     # load the header from the pointed-to image.

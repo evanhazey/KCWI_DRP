@@ -13,6 +13,7 @@ import time
 import numpy as np
 from scipy.optimize import curve_fit
 from astropy.io import fits
+import yaml
 
 
 class MakeMasterSky(BaseImg):
@@ -22,40 +23,53 @@ class MakeMasterSky(BaseImg):
     Uses b-spline fits along with geometry maps to generate a master sky image
     for sky subtraction.
 
-    This routine also handles the file `kcwi.sky`, which controls the master
-    sky generation.  This file consists of one line per image, with the first
+    This routine also handles the file `sky.yaml`, which controls the master
+    sky generation.  This file consists of a yaml with one structure line per image,
     column indicating the raw object image to be sky-subtracted.  The following
-    columns can either indicate a separate image to use for sky subtraction, the
-    filename of a mask fits image for masking object flux, or indicate that the
-    object is a continuum source and either automatically find the object, or
-    specify the location and width of the continuum source.  Below are example
-    one-line entries and what they mean:
+    keys can either indicate a separate image to use for sky subtraction, the
+    filename of a mask fits image for masking object flux, to indicate that the
+    object is a bright continuum source and to automatically find and mask the object,
+    or to indicate the existnce, position, and width of a faint continuum source  
+    to automatically mask it.  Below are example of entries for the mentioned modes:
 
     1. Skip sky subtraction for this particular object image:
 
-        * kr230925_00075.fits skip
+        * kr230925_00075: 
+        *     skip: True
 
+        
     2. Point to a different image for the sky (this assumes the \*_sky.fits
     image has already been generated previously:
 
-        * kr230925_00075.fits kr230925_00076.fits
+        * kr230925_00075:
+        *     offsky: kr230925_00076
+    
+    2a. If one wants to mask an object in a off sky frame, generate a sky mask for the
+    off skyframe, run it through the pipeline (to create a *sky.fits file), and then point 
+    to the off sky frame using step 2:
 
     3. Indicate that a mask file should be used to mask object flux when
-    deriving the sky model (see kcwi_masksky_ds9.py):
+    deriving the sky model (see kcwi_masksky_ds9.py). This mask file should
+    be placed in the reduction directory (i.e., pathtotdata/redux/):
 
-        * kr230925_00075.fits kr230925_00075_smsk.fits
+        * kr230925_00075:
+        *     skymask: kr230925_00075_smsk.fits
 
     4. Indicate that this is a bright continuum source and automatically mask
     the continuum source from the sky model:
 
-        * kr230925_00075.fits cont
+        * kr230925_00075:
+        *     use_auto_cont: True
 
     5. Indicate that this is a faint continuum source and specify the location
     and the width of the continuum source (in pixels):
 
-        * kr230925_00075.fits cont 45.0 7.6
+      * kr230925_00075:
+        *     use_faint_cont: True
+        *     faint_cont_pos: 45.0
+        *     faint_cont_width: 7.6
 
-    If no `kcwi.sky` file exists, or there is no entry for the input object
+    If no `sky.yaml` file exists, or there is no entry for the input object
     frame, then the entire image is used to generate the sky model.
 
     It is good practice to run all the data through first, then inspect the
@@ -65,11 +79,107 @@ class MakeMasterSky(BaseImg):
     If a sky model is generated, the routine will write out a \*_sky.fits image
     and add a sky entry in the proc table.
 
+    Below is a full list of the possible entries in the `sky.yaml` file for 2D-bspline sky subtraction.
+    You do not need to include all of the entries for each file, only the ones relevant to the file 
+    that is specified. However, if do add list all options, be suret o use None and False values 
+    for the options that are not relevant to a particular file.
+
+    krYYMMDD_XXXXX:
+        ### 2D spline and ZAP subtraction instructions ###
+        skip: True or False
+        offsky: krYYMMDD_XXXXY or None
+        ### 2D bspline sky subtraction instructions ###
+        skymask: krYYMMDD_XXXXX_smsk.fits
+        use_auto_cont: True or False
+        use_faint_cont: True or False
+        faint_cont_source_pos: 10 or None
+        faint_cont_source_width: 0.5 or None
+
     """
 
     def __init__(self, action, context):
         BaseImg.__init__(self, action, context)
         self.logger = context.pipeline_logger
+
+    def skyyaml_parser(self, skyyamlfile):
+        self.logger.info("Reading %s" % skyyamlfile)
+        with open(skyyamlfile, 'r') as file:
+            skyyaml = yaml.safe_load(file)
+        ofn = (strip_fname(self.action.args.name))
+        # is our file in the list?
+        if skyyaml.get(ofn, None) is not None:
+            reduxdir = self.config.instrument.output_directory
+            #Does the user want to skip sky subtraction for this frame?
+            if skyyaml[ofn].get('skip', None) == True:
+                self.logger.info("Skipping sky subtraction for %s" %
+                                        ofn)
+                keycom = 'sky corrected?'
+                self.action.args.ccddata.header['SKYCOR'] = (False,
+                                                                keycom)
+                return False
+
+            #Does the user want auto continuum masking?
+            elif skyyaml[ofn].get('use_auto_cont', None) == True:
+                self.logger.info("Automatic continuum masking requested for"
+                                    " %s" % ofn)
+                self.action.args.use_auto_cont = True
+
+            #Does the user want faint continuum masking?
+            elif skyyaml[ofn].get('use_faint_cont', None) == True:
+                self.logger.info("Faint continuum masking requested")
+                #Did the user supply the positions?
+                if ((skyyaml[ofn].get('faint_cont_source_pos', None) is not None) and (skyyaml[ofn].get('faint_cont_source_pos', None) != 'None')) and ((skyyaml[ofn].get('faint_cont_source_width', None) is not None) and (skyyaml[ofn].get('faint_cont_source_width', None) != 'None')):
+                    self.logger.info("Using faint continuum source for %s" % ofn)
+                    self.action.args.zap_use_faint_cont = True
+                    self.action.args.faint_cont_source_pos = skyyaml[ofn]['faint_cont_source_pos']
+                    self.action.args.faint_cont_source_width = skyyaml[ofn]['faint_cont_source_width']
+                    self.logger.info("Using input continuum position of "
+                                        "%s and width %s" %
+                                        (self.action.args.faint_cont_source_pos,
+                                        self.action.args.faint_cont_source_width))
+                else:
+                    self.logger.warning("Faint continuum masking requested but no positions supplied. Use faint_cont_pos and faint_cont_width so the program " \
+                    "can find the faint continuum source. Moving forward with no faint continuum mask.")
+                    self.action.args.use_faint_cont = False
+
+            # Do we have a science sky mask file?
+            elif (skyyaml[ofn].get('skymask', None) is not None) and (skyyaml[ofn].get('skymask', None) != 'None'):
+                skymask = os.path.join(reduxdir, skyyaml[ofn]['skymask'])
+                self.logger.info("Sky mask requested")
+                if os.path.exists(skymask):
+                    self.logger.info("Using sky mask file: %s" % skymask)
+                    self.action.args.zap_skymask = skymask
+                else:
+                    self.logger.warning("Sky mask supplied but not found: %s. Proceeding with no sky mask." % skymask)
+
+            #Do we have an off sky frame?
+            elif (skyyaml[ofn].get('offsky', None) is not None) and (skyyaml[ofn].get('offsky', None) != 'None'):
+                offsky = os.path.join(reduxdir, skyyaml[ofn]['offsky']+'.fits')
+                self.logger.info("Offsky frame requested")
+                if os.path.exists(offsky):
+                    self.logger.info("Using off-sky frame: %s" % offsky)
+                    self.action.args.offsky = offsky
+                    #Does the sky frame have a ZAP sky mask file?
+                    if (skyyaml[ofn].get('offsky_mask', None) is not None) and (skyyaml[ofn].get('offsky_mask', None) != 'None'):
+                        offsky_mask = os.path.join(reduxdir, skyyaml[ofn]['offsky_mask'])
+                        if os.path.exists(offsky_mask):
+                            self.logger.info("Using off-sky mask file: %s" % offsky_mask)
+                            self.action.args.zap_offsky_mask = offsky_mask
+                        else:
+                            self.logger.warning("ZAP off-sky mask requested but not found: %s. Proceeding with no off-sky mask." % offsky_mask)
+                            self.action.args.zap_offsky_mask = None
+                else:
+                    self.logger.warning("Off-sky frame requested but not found: %s. Proceeding with no off-sky frame." % offsky)
+                    self.action.args.offsky = None
+                    self.action.args.zap_offsky_mask = None
+            
+            #Return the arguments 
+            return self.action.args
+            
+        #No YAML entry for this file
+        else:
+            self.logger.info("No sky yaml entry for %s, using entire image to generate sky model" % ofn)
+            return self.action.args
 
     def _pre_condition(self):
         """
@@ -109,92 +219,19 @@ class MakeMasterSky(BaseImg):
         self.action.args.stdfile = stdfile
         self.action.args.stdname = stdname
 
-        # Is there a kcwi.sky file?
-        skyfile = None
-        skymask = None
-        contsky = False
-        cont_source_pos = None
-        cont_source_width = None
-        # check if kcwi.sky exists
-        if os.path.exists('kcwi.sky'):
-            self.logger.info("Reading kcwi.sky")
-            f = open('kcwi.sky')
-            skyproc = f.readlines()
-            f.close()
-            # is our file in the list?
-            for row in skyproc:
-                # skip comments
-                if row.startswith('#'):
-                    continue
-                # skip empty lines
-                if len(row.split()) < 1:
-                    continue
-                # Parse row:
-                # <raw sci file> <raw sky file> <optional mask file>
-                #  OR
-                # <raw sci file> skip
-                # to disable sky subtraction
-                # Find match to current file
-                if ofn in row.split()[0]:
-                    skyfile = row.split()[1]
-                    # Should we skip sky subtraction?
-                    if 'skip' in skyfile:
-                        self.logger.info("Skipping sky subtraction for %s" %
-                                         ofn)
-                        keycom = 'sky corrected?'
-                        self.action.args.ccddata.header['SKYCOR'] = (False,
-                                                                     keycom)
-                        return False
-                    elif 'cont' in skyfile:
-                        self.logger.info("Using continuum source local sky for"
-                                         " %s" % ofn)
-                        contsky = True
-                        if len(row.split()) == 4:
-                            cont_source_pos = float(row.split()[2])
-                            cont_source_width = float(row.split()[3])
-                            self.logger.info("Using input continuum pos of"
-                                             "%.2f with width of %.2f" %
-                                             (cont_source_pos,
-                                              cont_source_width))
-
-                    # Do we have an optional sky mask file?
-                    elif len(row.split()) > 2:
-                        skymask = row.split()[2]
-                        self.logger.info("Found sky mask entry for %s: %s"
-                                         % (ofn, skymask))
-
-                    self.logger.info("Found sky entry for %s: %s" % (ofn,
-                                                                     skyfile))
-            # Do have a mask file?
-            if skymask:
-                # Does it exist?
-                if os.path.exists(skymask):
-                    self.logger.info("Using sky mask file: %s" % skymask)
-                else:
-                    self.logger.warning("Sky mask file not found: %s" % skymask)
-                    skymask = None
-        # Record results
-        self.action.args.skyfile = skyfile
-        self.action.args.skymask = skymask
-        self.action.args.contsky = contsky
-        self.action.args.cont_source_pos = cont_source_pos
-        self.action.args.cont_source_width = cont_source_width
-        # Do we have a sky alternate?
-        if skyfile:
-            # Generate sky file name
-            msname = strip_fname(skyfile) + '_' + suffix + '.fits'
-            mskyf = os.path.join(rdir, msname)
-            # Does it exist?
-            if os.path.exists(mskyf):
-                self.logger.info("Master sky already exists: %s" % mskyf)
-                return False
-            else:
-                self.logger.warning("Alternate master sky %s not found."
-                                    % mskyf)
-                return True
-        else:
-            self.logger.info("No alternate master sky requested.")
-            return True
+        # Parse through sky subtraction instructions
+        self.action.args.skyyaml = None
+        self.action.args.offsky = None
+        self.action.args.skymask = None
+        self.action.args.use_auto_cont = False
+        self.action.args.use_faint_cont = False
+        self.action.args.faint_cont_source_pos = None
+        self.action.args.faint_cont_source_width = None
+        # Parse through sky subtraction instructions
+        if os.path.exists('sky.yaml'):
+            self.action.args.skyyaml = True
+            self.skyyaml_parser('sky.yaml')
+        return True
 
     def _perform(self):
         """
@@ -259,8 +296,8 @@ class MakeMasterSky(BaseImg):
         binary_mask = np.zeros(sm_sz, dtype=bool)
 
         # was sky masking requested?
-        if self.action.args.skymask:
-            if os.path.exists(self.action.args.skymask):
+        if self.action.args.skyyaml:
+            if self.action.args.skymask is not None:
                 self.logger.info("Reading sky mask file: %s"
                                  % self.action.args.skymask)
                 hdul = fits.open(self.action.args.skymask)
@@ -271,9 +308,6 @@ class MakeMasterSky(BaseImg):
                     self.logger.warning("Sky mask size mis-match: "
                                         "masking disabled")
                     binary_mask = np.zeros(sm_sz, dtype=bool)
-            else:
-                self.logger.warning("Sky mask image not found: %s"
-                                    % self.action.args.skymask)
 
         auto_masked = False
         auto_mask_type = ""
@@ -356,7 +390,7 @@ class MakeMasterSky(BaseImg):
 
         # if we are a continuum source,
         # get local mask for bright continuum source
-        elif self.action.args.contsky:
+        elif (self.action.args.skyyaml is not None) and ((self.action.args.use_auto_cont == True) or (self.action.args.use_faint_cont == True)):
             self.logger.info("continuum source observation will be auto-masked")
             auto_masked = True
 
@@ -368,7 +402,7 @@ class MakeMasterSky(BaseImg):
             con_sl_max_pos_data = None
             con_sl_max_flx_data = None
 
-            if self.action.args.cont_source_pos is None:
+            if self.action.args.use_auto_cont == True:
                 self.logger.info("Finding the continuum source automatically")
                 auto_mask_type = "AutoCont"
 
@@ -442,14 +476,14 @@ class MakeMasterSky(BaseImg):
                     else:
                         time.sleep(self.config.instrument.plot_pause)
 
-            else:
+            elif self.action.args.use_faint_cont == True:
                 self.logger.info("Using input source position of %.2f and"
                                  "source width of %.2f" %
-                                 (self.action.args.cont_source_pos,
-                                  self.action.args.cont_source_width))
+                                 (self.action.args.faint_cont_source_pos,
+                                  self.action.args.faint_cont_source_width))
                 auto_mask_type = "UserCont"
-                auto_cont_pos = self.action.args.cont_source_pos
-                auto_cont_width = self.action.args.cont_source_width
+                auto_cont_pos = self.action.args.faint_cont_source_pos
+                auto_cont_width = self.action.args.faint_cont_source_width
 
                 # First define source extent
                 con_pos_mask_0 = auto_cont_pos - auto_cont_width

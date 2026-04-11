@@ -1,11 +1,11 @@
 from keckdrpframework.primitives.base_img import BaseImg
 from kcwidrp.primitives.kcwi_file_primitives import kcwi_fits_reader, \
     kcwi_fits_writer, strip_fname
-from kcwidrp.primitives.GetAtlasLines import gaus
+#from kcwidrp.primitives.GetAtlasLines import gaus
 from kcwidrp.core.kcwi_get_std import kcwi_get_std
 from kcwidrp.core.bokeh_plotting import bokeh_plot
 from kcwidrp.core.kcwi_plotting import save_plot
-from kcwidrp.core.bspline import Bspline
+#from kcwidrp.core.bspline import Bspline
 from bokeh.plotting import figure
 from kcwidrp.core.kcwi_pkg_resources import get_resource_path
 import yaml
@@ -19,8 +19,10 @@ from astropy.io import fits
 import zap 
 from zap.zap import SKYSEG
 from astropy.stats import sigma_clip
+from astropy.modeling import models, fitting
 from scipy.interpolate import interp1d
-from regions import Regions
+from regions import PixCoord, EllipsePixelRegion
+import astropy.units as u
 import pkg_resources
 import time
 
@@ -44,25 +46,38 @@ class MakeMasterSky3D(BaseImg):
 
     1. Skip sky subtraction for this particular object image:
 
-        * kr230925_00075.fits skip
+        * kr230925_00075: 
+        *     skip: True
 
     2. Point to a different image for the sky (this assumes the \*_sky.fits
     image has already been generated previously:
 
-        * kr230925_00075.fits zap kr230925_00076.fits
+        * kr230925_00075:
+        *    offsky: kr230925_00076.fits
 
+    2a.  Indicate that a off sky mask file should be used to mask object flux when
+    deriving the sky model (see kcwi_maskskyzap_ds9.py). This mask should
+    be in the reduction directory e.g, pathtodata/redux/:
+
+        * kr230925_00075:
+        *     offsky: kr230925_00076
+        *     zap_offsky_mask: kr230925_00076_zapsmsk.fits
+    
     3. Indicate that a mask file should be used to mask object flux when
-    deriving the sky model (see kcwi_maskskyzap_ds9.py):
+    deriving the sky model (see kcwi_maskskyzap_ds9.py). This mask should
+    be in the reduction directory e.g, pathtodata/redux/:
 
-        * kr230925_00075.fits zap kr230925_00075.fits kr230925_00075_smskzap.fits
+        * kr230925_00075: 
+        *     skymask: kr230925_00075_zapsmsk.fits
 
     4. Indicate that this is a bright continuum source and automatically mask
     the continuum source from the sky model.
 
-        * kr230925_00075.fits contzap
+        * kr230925_00075:
+        *     zap_use_auto_cont: True
 
-    5. Indicate that this is a faint continuum source and specify the location
-    of the continuum source (in pixels). Supply the vertices for a rectangle 
+    5. Indicate that there is a faint continuum source and specify the location
+    of thesource (in pixels) to be masked. Supply the vertices of a rectangle 
     with the lower left coorindates x1,y1 followed by the upper right x2,y2, 
     leave no spaces between the coordnates and separate the x and y with a comma: 
              --- .x2,y2
@@ -70,7 +85,10 @@ class MakeMasterSky3D(BaseImg):
             |    |
       x1,y1 .---- 
     
-        * kr230925_00075.fits contzap 22,22 66,66
+        * kr230925_00075:
+        *     zap_use_faint_cont: True
+        *     zap_faint_cont_x1y1: 22,22
+        *     zap_faint_cont_x2y2: 66,66
 
     If no `kcwi.sky` file exists, or there is no entry for the input object
     frame, then the entire image is used to generate the sky model.
@@ -83,6 +101,22 @@ class MakeMasterSky3D(BaseImg):
     and add a sky entry in the proc table. A toggle can be made in the config file
     to add the sky model as an extension to the \*_icube.fits file instead of 
     writing out a separate \*_sky.fits file.
+
+    Below is a full list of the possible entries in the `kcwi.yaml` file for ZAP sky subtraction:
+    You do not need to include all of these entries for each file, only the ones relevant to your 
+    data and the type of sky subtraction you want to do. However, if you would to add all be sure
+    to use None and False values for the entries that are not relevant to your data 
+    krYYMMDD_XXXXX:
+    ### 2D spline and ZAP subtraction instructions ###
+    skip: True or False
+    offsky: krYYMMDD_XXXXX or None
+    ### ZAP sky subtraction instructions ###
+    zap_skymask: krYYMMDD_XXXXX_icube_zapskymask.fits or None
+    zap_offsky_mask: krYYMMDD_XXXXX_icube_zapskymask.fits or None
+    zap_use_auto_cont: True or False
+    zap_use_faint_cont: True or False
+    zap_faint_cont_x1y1: 5,5 or None
+    zap_faint_cont_x2y2: 12,12 or None
 
     """
 
@@ -112,7 +146,6 @@ class MakeMasterSky3D(BaseImg):
                 self.logger.info("Automatic continuum masking requested for"
                                     " %s" % ofn)
                 self.action.args.zap_use_auto_cont = True
-                self.action.args.ccddata.header['ZAPAUTOMASK'] = True
 
             #Does the user want faint continuum masking for ZAP?
             elif skyyaml[ofn].get('zap_use_faint_cont', None) == True:
@@ -121,11 +154,8 @@ class MakeMasterSky3D(BaseImg):
                 if ((skyyaml[ofn].get('zap_faint_cont_x1y1', None) is not None) and (skyyaml[ofn].get('zap_faint_cont_x1y1', None) != 'None')) and ((skyyaml[ofn].get('zap_faint_cont_x2y2', None) is not None) and (skyyaml[ofn].get('zap_faint_cont_x2y2', None) != 'None')):
                     self.logger.info("ZAP Using faint continuum source for %s" % ofn)
                     self.action.args.zap_use_faint_cont = True
-                    self.action.args.zap_faint_cont_x1y1 = tuple((skyyaml[ofn]['zap_faint_cont_x1y1'].split(',')[0], skyyaml[ofn]['zap_faint_cont_x1y1'].split(',')[1]))
-                    self.action.args.zap_faint_cont_x2y2 = tuple((skyyaml[ofn]['zap_faint_cont_x2y2'].split(',')[0], skyyaml[ofn]['zap_faint_cont_x2y2'].split(',')[1]))
-                    self.action.args.ccddata.header['ZAPCONTMASK'] = True
-                    self.action.args.ccddata.header['ZAPCONTX1Y1'] = self.action.args.zap_faint_cont_x1y1
-                    self.action.args.ccddata.header['ZAPCONTX2Y2'] = self.action.args.zap_faint_cont_x2y2
+                    self.action.args.zap_faint_cont_x1y1 = tuple((int(skyyaml[ofn]['zap_faint_cont_x1y1'].split(',')[0]), int(skyyaml[ofn]['zap_faint_cont_x1y1'].split(',')[1])))
+                    self.action.args.zap_faint_cont_x2y2 = tuple((int(skyyaml[ofn]['zap_faint_cont_x2y2'].split(',')[0]), int(skyyaml[ofn]['zap_faint_cont_x2y2'].split(',')[1])))
                     self.logger.info("Using input continuum position of "
                                         "lower left (x1,y1)==%s upper right (x2,y2)=%s" %
                                         (self.action.args.zap_faint_cont_x1y1,
@@ -142,7 +172,6 @@ class MakeMasterSky3D(BaseImg):
                 if os.path.exists(zap_skymask):
                     self.logger.info("Using ZAP sky mask file: %s" % zap_skymask)
                     self.action.args.zap_skymask = zap_skymask
-                    self.action.args.ccddata.header['ZAPSKYMASK'] = zap_skymask
                 else:
                     self.logger.warning("ZAP sky mask supplied but not found: %s. Proceeding with no ZAP sky mask." % zap_skymask)
             
@@ -153,16 +182,14 @@ class MakeMasterSky3D(BaseImg):
                 if os.path.exists(offsky):
                     self.logger.info("Using off-sky frame: %s" % offsky)
                     self.action.args.offsky = offsky
-                    self.action.args.ccddata.header['ZAPOFFSKY'] = offsky
                     #Does the sky frame have a ZAP sky mask file?
                     if (skyyaml[ofn].get('zap_offsky_mask', None) is not None) and (skyyaml[ofn].get('zap_offsky_mask', None) != 'None'):
                         zap_offsky_mask = os.path.join(reduxdir, skyyaml[ofn]['zap_offsky_mask'])
                         if os.path.exists(zap_offsky_mask):
                             self.logger.info("Using ZAP off-sky mask file: %s" % zap_offsky_mask)
                             self.action.args.zap_offsky_mask = zap_offsky_mask
-                            self.action.args.ccddata.header['ZAPOFFSKYMASK'] = zap_offsky_mask
                         else:
-                            self.logger.warning("ZAP off-sky mask supplied but not found: %s. Proceeding with no ZAP off-sky mask." % zap_offsky_mask)
+                            self.logger.warning("ZAP off-sky mask requested but not found: %s. Proceeding with no ZAP off-sky mask." % zap_offsky_mask)
                             self.action.args.zap_offsky_mask = None
                 else:
                     self.logger.warning("Off-sky frame supplied but not found: %s. Proceeding with no off-sky frame." % offsky)
@@ -231,7 +258,6 @@ class MakeMasterSky3D(BaseImg):
             self.skyyaml_parser('sky.yaml')
 
         return True
-
 
 
     def _perform(self):
@@ -342,61 +368,76 @@ class MakeMasterSky3D(BaseImg):
             hdr2d = collapse_header(scihdu[0].header)
             wlhdu = fits.PrimaryHDU(wlimg, header = hdr2d)
             hdulist = fits.HDUList([wlhdu, mhdu])
-            hdulist.writeto(os.path.join(rdir, strip_fname(ofn_full) + '_wlimg.fits'), overwrite = True)
+            hdulist.writeto(os.path.join(rdir, strip_fname(ofn_full) + '_icube_zapwlimg.fits'), overwrite = True)
         
 
         ### HANDLE SKY MASKS AND OFF-SKY FRAMES ##
-        zap_using_offsky = False
         #Does the user have a skyfile to specify sky subtraction parameters?
-        if self.action.args.skyyaml is not None:
+        if (self.action.args.skyyaml is not None) or (self.action.args.stdfile is not None):
             #Is there a science sky mask available?
-            #if self.action.args.zap_skymask is not None:
-            #    self.action.args.zap_skymask = os.path.join(rdir, self.action.args.zap_skymask)
-            
+            if self.action.args.zap_skymask is not None:
+                scihdu[0].header['ZAPSKYMASK'] = self.action.args.zap_skymask
+                #Trim the edges of the cube to get an even better sky model
+                zsm = fits.open(self.action.args.zap_skymask)
+                zsm.data[:, :1], zsm.data[:, -1:] = 1, 1 #x mask the edges to avoid edge effects in the sky model
+                zsm.data[:2, :], zsm.data[-2:, :] = 1, 1 #y mask the edges to avoid edge effects in the sky model
+                zsm.writeto(self.action.args.zap_skymask, overwrite = True)
+
             #Is automated continuum masking being requested?
-            if self.action.args.zap_use_auto_cont:
-                #Is automated continuum masking being requested?
-                self.logger.info("Finding bright continuum source automatically")
-                yplt = self.action.args.ccddata.data.flat
-                sig = float(np.nanstd(yplt))
-                con_sl_sig_max = sig
-                con_sl_max = si
-                con_sl_max_flx_data = yplt.copy()
-                ipk = np.argmax(con_sl_max_flx_data)
-                fpk = con_sl_max_flx_data[ipk]
-
-                # gaussian fit to max slice
-                res, _ = curve_fit(gaus, con_sl_max_pos_data,
-                                con_sl_max_flx_data, p0=[fpk, ppk, 1.])
-                self.logger.info("Continuum source max at %.2f in "
-                                "slice %d with width %.2f px"
-                                % (res[1], con_sl_max, res[2]))
-
-                # First define source extent
-                con_pos_mask_0 = res[1] - 7. * res[2]
-                con_pos_mask_1 = res[1] + 7. * res[2]
-
-                auto_cont_pos = res[1]
-                auto_cont_width = 7. * res[2]
-
-                # Next define lower and upper windows
-                con_pos_mask_lo_0 = con_pos_mask_0 - \
-                    14 / self.action.args.xbinsize
-                con_pos_mask_up_1 = con_pos_mask_1 + \
-                    14 / self.action.args.xbinsize
+            elif (self.action.args.zap_use_auto_cont == True) or (self.action.args.stdfile is not None):
+                if self.action.args.stdfile is not None:
+                    self.logger.info("Processing standard star, finding bright continuum source automatically")    
+                else:
+                    self.logger.info("Finding bright continuum source automatically")
+                scihdu[0].header['ZAPAUTOMASK'] = True
+                fnautomask = os.path.join(rdir, strip_fname(ofn_full) + '_icube_zapskmaskauto.fits')
+                self.action.args.zap_skymask = fnautomask
+                #Generate initial guesses for the 2D Gaussian fit to find the continuum source and generate the ZAP sky mask
+                wl = np.sum(scihdu[0].data, axis = 0) #make whitelight image 
+                wl_clip = sigma_clip(wl, sigma=3).data #try and remove leftover cosmic rays
+                wl_clip[:, :2], wl_clip[:, -2:] = 0, 0 #x trim the edges of the cube to avoid edge effects in the fit
+                wl_clip[:3, :], wl_clip[-3:, :] = 0, 0 #y trim the edges of the cube to avoid edge effects in the fit
+                amp_og = np.max(wl_clip) #Initial amplitude guess
+                idx_pk = np.where(wl_clip == np.max(wl_clip)) #flux peak of the whitelight image
+                x_og, y_og  = idx_pk[1][0], idx_pk[0][0] #x peak, y peak for initial guess
+                xsigma_og, ysigma_og = 4 , 2.5 #sigma gueses for the 2D Gaussian fit
+                theta_og = 0 #shoud be close to zero for the angle of the 2D Gaussian fit
+                y, x = np.mgrid[:wl_clip.shape[0], :wl_clip.shape[1]]
+                # 2D gaussian fit to peak
+                fitter = fitting.LevMarLSQFitter()
+                mod_og = models.Gaussian2D(amplitude=amp_og, x_mean=x_og, y_mean=y_og, x_stddev=xsigma_og, y_stddev=ysigma_og, theta=theta_og)
+                mod_fit = fitter(mod_og,  x, y, wl_clip)
+                #Take best fit parameters and turn into elliptical mask
+                growthfactor = 1.25 #=2.355 to convert sigma to fwhm, can use smaller factor too
+                x, y, xwidth, ywidth = mod_fit.x_mean.value, mod_fit.y_mean.value, mod_fit.x_stddev.value*growthfactor, mod_fit.y_stddev.value*growthfactor
+                center = center = PixCoord(x, y)
+                ellipse_reg = EllipsePixelRegion(center=center, width=xwidth, height=ywidth, angle=mod_fit.theta.value*u.radian)
+                mask = ellipse_reg.to_mask(mode='center').to_image(shape=wl_clip.shape)
+                zapskymask = fits.PrimaryHDU(mask)
+                zapskymask.writeto(fnautomask, overwrite = True)
+                self.action.args.zap_skymask = fnautomask
+                self.logger.info("Continuum source xmean and ymean at (%.2f , %.2f),"
+                                "x_width= %.2f, y_width=%.2f, and theta=%.2f degrees"
+                                % (x, y, xwidth, ywidth, np.degrees(mod_fit.theta.value)))
 
             #Are we masking a faint source and being given its box vertices positions?
             elif self.action.args.zap_use_faint_cont==True:
                 x1, x2 = self.action.args.zap_faint_cont_x1y1[0], self.action.args.zap_faint_cont_x2y2[0]
                 y1, y2 = self.action.args.zap_faint_cont_x1y1[1], self.action.args.zap_faint_cont_x2y2[1]
-                skymaskzaparr = np.zeros_like(wlhdu[0].data.shape, dtype=int)
-                skymaskzaparr[y2:y1, x2:x1] = 1
-                skymaskzap = fits.PrimaryHDU(skymaskzaparr, header = hdr2d)
-                skymaskzap.close()
-
+                mask_shape = np.sum(scihdu[0].data, axis = 0).shape
+                fnfaintskymaskzap = os.path.join(rdir, strip_fname(ofn_full) + '_icube_zapsmskfaint.fits')
+                faintskymaskzaparr = np.zeros(mask_shape, dtype=int)
+                faintskymaskzaparr[y1:y2, x1:x2] = 1
+                faintskymaskzap = fits.PrimaryHDU(faintskymaskzaparr, header = hdr2d)
+                faintskymaskzap.writeto(fnfaintskymaskzap, overwrite = True)
+                scihdu[0].header['ZAPFAINTMASK'] = True
+                scihdu[0].header['ZAPFAINTX1Y1'] = self.action.args.zap_faint_cont_x1y1
+                scihdu[0].header['ZAPFAINTX2Y2'] = self.action.args.zap_faint_cont_x2y2
+                self.action.args.zap_skymask = fnfaintskymaskzap
 
             #Using an off field sky frame
             elif self.action.args.offsky is not None:
+                scihdu[0].header['OFFSKY'] = self.action.args.offsky
                 offskyhdu = fits.open(self.action.args.offsky)
                 offskyhdu = crop_cube(offskyhdu) #crop the data cube to good wavelength region
                 scale_factor = scale_extinct_sky(offskyhdu[0].header, scihdr) #scale the sky to the same airmass as sci
@@ -416,6 +457,9 @@ class MakeMasterSky3D(BaseImg):
                 offskyhdu[0].header['ZAPPROCESSED'] = True
                 offskyhdu[0].header['ZAPOFFSKY'] = True
                 offskyhdu.writeto(self.action.args.offsky, overwrite = True)
+
+                if self.action.args.zap_offsky_mask is not None:
+                    scihdu[0].header['ZAPOFFSKYMASK'] = self.action.args.zap_offsky_mask
 
                 #Is interactive mode set?
                 if self.config.instrument.zap_interactive == True:
@@ -437,7 +481,7 @@ class MakeMasterSky3D(BaseImg):
                     offskymask = np.mean(offskyhdu['FLAGS'].data, axis = 0)
                     offskymhdu = fits.ImageHDU(offskymask, header = offskyhdr2d)
                     offskyhdulist = fits.HDUList([offskywlhdu, offskymhdu])
-                    offskyhdulist.writeto(os.path.join(rdir, strip_fname(self.action.args.offsky) + '_wlimg.fits'), overwrite = True)
+                    offskyhdulist.writeto(os.path.join(rdir, strip_fname(self.action.args.offsky) + '_zapwlimg.fits'), overwrite = True)
 
         ### ESTABLISH SKY SEGMENTS FOR ZAP ###
         skyseg0 = []
@@ -531,7 +575,7 @@ class MakeMasterSky3D(BaseImg):
         #If user asked to append the sky model as an extension
         if self.config.instrument.zap_append_sky == True:
             cleanhdu.append(scihdu[0])
-            cleanhdu[-1].name = 'UNZAPPED'
+            cleanhdu[-1].name = 'PREZAP'
             skyhdu = fits.ImageHDU(data=skycube, header=scihdu[0].header)
             skyhdu.name = 'ZAPSKYMODEL'
             cleanhdu.append(skyhdu)
@@ -542,10 +586,6 @@ class MakeMasterSky3D(BaseImg):
             skyhdu.writeto(os.path.join(rdir, strip_fname(ofn_full) + '_icube_zapsky.fits'), overwrite = True)
         
         #Write out the ZAPPED datacube and requested extensions
-        ofn_full = self.action.args.name
-        ofn = os.path.basename(ofn_full)
-
-        #Finally update the current frame
         self.action.args.ccddata.data = cleanhdu[0].data
         self.action.args.ccddata.header = cleanhdu[0].header
         self.action.args.ccddata.uncertainty = cleanhdu['UNCERT'].data
@@ -554,8 +594,8 @@ class MakeMasterSky3D(BaseImg):
         if self.action.args.ccddata.noskysub is not None:
             self.action.args.ccddata.noskysub = cleanhdu['NOSKYSUB'].data
         if self.config.instrument.zap_append_sky:
-            self.action.args.ccddata.unzap = cleanhdu['UNZAPPED'].data
-            self.action.args.ccddata.zapsky = cleanhdu['ZAPSKYMODEL'].data
+            self.action.args.ccddata.prezap = cleanhdu['PREZAP'].data
+            self.action.args.ccddata.zapskymodel = cleanhdu['ZAPSKYMODEL'].data
         #attrname = getattr(self.action.args.ccddata, "UNCERT", None)
         #print('Attribute Name FLAG: {}'.format(attrname))
         #print(cleanhdu.info())
@@ -564,7 +604,21 @@ class MakeMasterSky3D(BaseImg):
             output_file=self.action.args.name,
             output_dir=self.config.instrument.output_directory,
             suffix="icube")
-        
+
+        #Update proc table
+        #Show that the file has been processed via ZAP
+        self.context.proctab.update_proctab(frame=self.action.args.ccddata,
+                                    suffix='icube',
+                                    newtype="ZSKY",
+                                    filename=self.action.args.name)
+        self.context.proctab.write_proctab(tfil=self.config.instrument.procfile)
+        #General update that this file has been processed
+        self.context.proctab.update_proctab(frame=self.action.args.ccddata,
+                            suffix='icube',
+                            newtype="OBJECT",
+                            filename=self.action.args.name)
+        self.context.proctab.write_proctab(tfil=self.config.instrument.procfile)
+
         #Update logger info 
         log_string = MakeMasterSky3D.__module__
         self.logger.info(log_string)
