@@ -49,20 +49,25 @@ class MakeMasterSky3D(BaseImg):
         * kr230925_00075: 
         *     skip: True
 
-    2. Point to a different image for the sky (this assumes the \*_sky.fits
-    image has already been generated previously:
+    2. Point to a different image for the sky. Turn off
+    sky subtraction for the offsky frame to make sure it is
+    not processed twice:
 
         * kr230925_00075:
         *    offsky: kr230925_00076.fits
-
-    2a.  Indicate that a off sky mask file should be used to mask object flux when
+        * kr230925_00076:
+        *    skip: True
+        
+    2a.  Indicate that an off sky mask file should be used to mask object flux when
     deriving the sky model (see kcwi_maskskyzap_ds9.py). This mask should
     be in the reduction directory e.g, pathtodata/redux/:
 
         * kr230925_00075:
         *     offsky: kr230925_00076
         *     zap_offsky_mask: kr230925_00076_zapsmsk.fits
-    
+        * kr230925_00076:
+        *    skip: True
+            
     3. Indicate that a mask file should be used to mask object flux when
     deriving the sky model (see kcwi_maskskyzap_ds9.py). This mask should
     be in the reduction directory e.g, pathtodata/redux/:
@@ -71,26 +76,27 @@ class MakeMasterSky3D(BaseImg):
         *     skymask: kr230925_00075_zapsmsk.fits
 
     4. Indicate that this is a bright continuum source and automatically mask
-    the continuum source from the sky model.
+    the source from the sky model. This will save the mask as *zasmskauto.fits
+    in the reduction directory.
 
         * kr230925_00075:
         *     zap_use_auto_cont: True
 
     5. Indicate that there is a faint continuum source and specify the location
-    of thesource (in pixels) to be masked. Supply the vertices of a rectangle 
-    with the lower left coorindates x1,y1 followed by the upper right x2,y2, 
-    leave no spaces between the coordnates and separate the x and y with a comma: 
-             --- .x2,y2
-            |    | 
-            |    |
-      x1,y1 .---- 
+    of the source (in pixels) to be masked. Supply the vertices of a rectangle 
+    with the lower left coorindates x1,y1 then the upper right x2,y2 (see figure).
+    Leave no spaces between the coordnates and separate the x and y with a comma: 
+               --- .x2,y2
+              |    | 
+              |    |
+        x1,y1 .---- 
     
         * kr230925_00075:
         *     zap_use_faint_cont: True
         *     zap_faint_cont_x1y1: 22,22
         *     zap_faint_cont_x2y2: 66,66
 
-    If no `kcwi.sky` file exists, or there is no entry for the input object
+    If no `sky.yaml` file exists, or there is no entry for the input object
     frame, then the entire image is used to generate the sky model.
 
     It is good practice to run all the data through first, then inspect the
@@ -102,21 +108,21 @@ class MakeMasterSky3D(BaseImg):
     to add the sky model as an extension to the \*_icube.fits file instead of 
     writing out a separate \*_sky.fits file.
 
-    Below is a full list of the possible entries in the `kcwi.yaml` file for ZAP sky subtraction:
-    You do not need to include all of these entries for each file, only the ones relevant to your 
-    data and the type of sky subtraction you want to do. However, if you would to add all be sure
-    to use None and False values for the entries that are not relevant to your data 
+    Below is a full list of the possible entries in the `sky.yaml` file for ZAP sky subtraction:
+    You do not need to include all of these entries for each file, only the ones relevant to the 
+    frame and the features you want to use. However, if you want to add all parameters, be sure
+    to use None and False values for the features that are not relevant to the frame 
     krYYMMDD_XXXXX:
-    ### 2D spline and ZAP subtraction instructions ###
-    skip: True or False
-    offsky: krYYMMDD_XXXXX or None
-    ### ZAP sky subtraction instructions ###
-    zap_skymask: krYYMMDD_XXXXX_icube_zapskymask.fits or None
-    zap_offsky_mask: krYYMMDD_XXXXX_icube_zapskymask.fits or None
-    zap_use_auto_cont: True or False
-    zap_use_faint_cont: True or False
-    zap_faint_cont_x1y1: 5,5 or None
-    zap_faint_cont_x2y2: 12,12 or None
+        # General sky subtraction instructions #
+        skip: True or False
+        offsky: krYYMMDD_XXXXX or None
+        # ZAP sky subtraction instructions #
+        zap_skymask: krYYMMDD_XXXXX_icube_zapskymask.fits or None
+        zap_offsky_mask: krYYMMDD_XXXXX_icube_zapskymask.fits or None
+        zap_use_auto_cont: True or False
+        zap_use_faint_cont: True or False
+        zap_faint_cont_x1y1: 5,5 or None
+        zap_faint_cont_x2y2: 12,12 or None
 
     """
 

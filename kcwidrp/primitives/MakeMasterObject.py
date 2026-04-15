@@ -68,11 +68,14 @@ class MakeMasterObject(BaseImg):
         nstack = len(combine_list)
         if nstack > 3:
             method = 'average'
-        if self.config.instrument.object_min_nframes_combine_method is not None:
-           if (self.config.instrument.object_min_nframes_combine_method != 'average') and (self.config.instrument.object_min_nframes_combine_method != 'median'):
-            self.logger.warning(f"Invalid combine method given: %s. Choose 'average' or 'median'. Defaulting to %s" % (self.config.instrument.object_min_nframes_combine_method, method))
+
+        # use provided combine method if specified
+        if self.config.instrument.object_combine_method is not None:
+           if ("average" in self.config.instrument.object_combine_method) or ("median" in self.config.instrument.object_combine_method) or ("sum" in self.config.instrument.object_combine_method):
+               self.logger.info(f"User has requested combine method: %s" % (self.config.instrument.object_combine_method))
+               method = self.config.instrument.object_combine_method
            else:
-                method = self.config.instrument.object_min_nframes_combine_method
+                self.logger.warning(f"Invalid combine method given: %s. Choose average, median, or sum. Defaulting to %s" % (self.config.instrument.object_combine_method, method))
 
         self.logger.info("Combining Master Object with method %s" % method)
 

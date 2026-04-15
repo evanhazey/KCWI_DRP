@@ -342,8 +342,8 @@ def main():
             kcwi_config.BLUE['contbars_min_nframes'])
         framework.config.instrument.object_min_nframes = int(
             kcwi_config.BLUE['object_min_nframes'])
-        framework.config.instrument.object_min_nframes_combine_method = str(
-            kcwi_config.BLUE['object_min_nframes_combine_method'])
+        framework.config.instrument.object_combine_method = str(
+            kcwi_config.BLUE['object_combine_method'])
         framework.config.instrument.minoscanpix = int(
             kcwi_config.BLUE['minoscanpix'])
         framework.config.instrument.oscanbuf = int(
@@ -355,8 +355,8 @@ def main():
             kcwi_config.RED['contbars_min_nframes'])
         framework.config.instrument.object_min_nframes = int(
             kcwi_config.RED['object_min_nframes'])
-        framework.config.instrument.object_min_nframes_combine_method = str(
-            kcwi_config.RED['object_min_nframes_combine_method'])
+        framework.config.instrument.object_combine_method = str(
+            kcwi_config.RED['object_combine_method'])
         framework.config.instrument.minoscanpix = int(
             kcwi_config.RED['minoscanpix'])
         framework.config.instrument.oscanbuf = int(
@@ -377,6 +377,8 @@ def main():
         f"contbars_min_nframes={framework.config.instrument.contbars_min_nframes}")
     framework.context.pipeline_logger.debug(
         f"object_min_nframes={framework.config.instrument.object_min_nframes}")
+    framework.context.pipeline_logger.debug(
+        f"object_combine_method={framework.config.instrument.object_combine_method}")
     framework.context.pipeline_logger.debug(
         f"minoscanpix={framework.config.instrument.minoscanpix}")
     framework.context.pipeline_logger.debug(
