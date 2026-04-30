@@ -48,6 +48,7 @@ class MakeMasterSky(BaseImg):
     off skyframe, run it through the pipeline (to create a *sky.fits file), and then point 
     to the off sky frame using step 2:
 
+    
     3. Indicate that a mask file should be used to mask object flux when
     deriving the sky model (see kcwi_masksky_ds9.py). This mask file should
     be placed in the reduction directory (i.e., pathtotdata/redux/):
@@ -85,10 +86,10 @@ class MakeMasterSky(BaseImg):
     for the options that are not relevant to a particular file.
 
     krYYMMDD_XXXXX:
-        ### 2D spline and ZAP subtraction instructions ###
+        # General sky subtraction instructions #
         skip: True or False
         offsky: krYYMMDD_XXXXY or None
-        ### 2D bspline sky subtraction instructions ###
+        # 2D bspline sky subtraction instructions #
         skymask: krYYMMDD_XXXXX_smsk.fits
         use_auto_cont: True or False
         use_faint_cont: True or False

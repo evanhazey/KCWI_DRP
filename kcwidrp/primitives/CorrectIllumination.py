@@ -29,7 +29,7 @@ class CorrectIllumination(BasePrimitive):
         self.logger.info("Checking precondition for CorrectIllumination")
         # first check for internal flat
         target_type = 'MFLAT'
-        if (self.config.instrument.flat_order is not None) and (len(self.config.instrument.flat_order) >= 1):
+        if (self.config.instrument.flat_order is not None) and (self.config.instrument.flat_order != 'None') and (len(self.config.instrument.flat_order) >= 1):
             target_type = self.config.instrument.flat_order[0]            
         tab = self.context.proctab.search_proctab(
             frame=self.action.args.ccddata, target_type=target_type,
@@ -37,7 +37,7 @@ class CorrectIllumination(BasePrimitive):
         if len(tab) <= 0:
             # next look for twilight flat
             target_type = 'MTWIF'
-            if (self.config.instrument.flat_order is not None) and (len(self.config.instrument.flat_order) >=2):
+            if (self.config.instrument.flat_order is not None) and (self.config.instrument.flat_order != 'None') and (len(self.config.instrument.flat_order) >=2):
                 target_type = self.config.instrument.flat_order[1]
             tab = self.context.proctab.search_proctab(
                 frame=self.action.args.ccddata, target_type=target_type,
@@ -45,7 +45,7 @@ class CorrectIllumination(BasePrimitive):
             if len(tab) <= 0:
                 # finally look for dome flat
                 target_type = 'MDOME'
-                if (self.config.instrument.flat_order is not None) and (len(self.config.instrument.flat_order) >=3):
+                if (self.config.instrument.flat_order is not None) and (self.config.instrument.flat_order != 'None') and (len(self.config.instrument.flat_order) >=3):
                     target_type = self.config.instrument.flat_order[2]
                 tab = self.context.proctab.search_proctab(
                     frame=self.action.args.ccddata, target_type=target_type,

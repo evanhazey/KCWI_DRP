@@ -1,11 +1,10 @@
 krYYMMDD_XXXXX:
-    ### 2D spline and ZAP subtraction instructions ###
+    ### General sky subtraction instructions ###
     skip: False
     offsky: 'krYYMMDD_XXXXX' #or ['krYYMMDD_XXXXX', 'krYYMMDD_XXXXX1', 'krYYMMDD_XXXXX2'] for multiple off sky frames
     offsky_combine_method: 'median' #or 'mean' for multiple off sky masks
     ### 2D bspline sky subtraction instructions ###
     skymask: krYYMMDD_XXXXX_smsk.fits
-    #offsky_mask: krYYMMDD_XXXXX_smsk.fits This can be done by masking the offsky frame first THEN re-running MakeMasterSky with generated skyframe
     use_auto_cont: False
     use_faint_cont: False
     faint_cont_source_pos: 10
@@ -13,7 +12,10 @@ krYYMMDD_XXXXX:
     ### ZAP sky subtraction instructions ###
     zap_skymask: krYYMMDD_XXXXX_icube_zapskymask.fits
     zap_offsky_mask: krYYMMDD_XXXXX_icube_zapskymask.fits
-    zap_use_auto_cont: False
-    zap_use_faint_cont: False
-    zap_faint_cont_x1y1: 5,5
-    zap_faint_cont_x2y2: 12,12
+    zap_use_auto_cont: True of False
+    zap_use_faint_cont: True or False
+    zap_faint_cont_x1y1: 5,5 or None
+    zap_faint_cont_x2y2: 12,12 or None
+    zap_skysegmentoption: single or Soto+2016 or custom
+    zap_customskysegments: [0,5000,75000]
+    zap_cfwidth: 300 or None

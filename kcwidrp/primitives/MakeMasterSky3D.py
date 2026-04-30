@@ -4,6 +4,7 @@ from kcwidrp.primitives.kcwi_file_primitives import kcwi_fits_reader, \
 #from kcwidrp.primitives.GetAtlasLines import gaus
 from kcwidrp.core.kcwi_get_std import kcwi_get_std
 from kcwidrp.core.bokeh_plotting import bokeh_plot
+from bokeh.plotting import figure, gridplot, show
 from kcwidrp.core.kcwi_plotting import save_plot
 #from kcwidrp.core.bspline import Bspline
 from bokeh.plotting import figure
@@ -13,17 +14,17 @@ import yaml
 import os
 import time
 import numpy as np
-from scipy.optimize import curve_fit
 from astropy.io import fits
 
 import zap 
 from zap.zap import SKYSEG
+import scipy.stats as scistats
 from astropy.stats import sigma_clip
 from astropy.modeling import models, fitting
 from scipy.interpolate import interp1d
 from regions import PixCoord, EllipsePixelRegion
+from scipy.interpolate import UnivariateSpline, splrep, splev
 import astropy.units as u
-import pkg_resources
 import time
 
 
@@ -44,7 +45,7 @@ class MakeMasterSky3D(BaseImg):
     specify the location and width of the continuum source.  Below are example
     one-line entries and what they mean:
 
-    1. Skip sky subtraction for this particular object image:
+    1. Skip sky subtraction for this particular frame:
 
         * kr230925_00075: 
         *     skip: True
@@ -94,7 +95,7 @@ class MakeMasterSky3D(BaseImg):
         * kr230925_00075:
         *     zap_use_faint_cont: True
         *     zap_faint_cont_x1y1: 22,22
-        *     zap_faint_cont_x2y2: 66,66
+        *     zap_faint_cont_x2y2: 44,44
 
     If no `sky.yaml` file exists, or there is no entry for the input object
     frame, then the entire image is used to generate the sky model.
@@ -112,6 +113,8 @@ class MakeMasterSky3D(BaseImg):
     You do not need to include all of these entries for each file, only the ones relevant to the 
     frame and the features you want to use. However, if you want to add all parameters, be sure
     to use None and False values for the features that are not relevant to the frame 
+
+    #Object name (do not include ".fits")
     krYYMMDD_XXXXX:
         # General sky subtraction instructions #
         skip: True or False
@@ -123,7 +126,9 @@ class MakeMasterSky3D(BaseImg):
         zap_use_faint_cont: True or False
         zap_faint_cont_x1y1: 5,5 or None
         zap_faint_cont_x2y2: 12,12 or None
-
+        zap_skysegmentoption: 'single', 'Soto+2016', or 'custom'
+        zap_customskysegments: [] or None
+        zap_cfwidth: 300 or None        
     """
 
     def __init__(self, action, context):
@@ -202,6 +207,47 @@ class MakeMasterSky3D(BaseImg):
                     self.action.args.offsky = None
                     self.action.args.zap_offsky_mask = None
             
+            #Do we have parameters to control ZAP?
+            # Sky segment for this object 
+            if (skyyaml[ofn].get('zap_skysegmentoption', None) is not None) and (skyyaml[ofn].get('zap_skysegmentoption', None) != 'None'):
+                self.logger.info("Frame specific ZAP sky segment to be used")
+                zap_skysegmentoption = skyyaml[ofn]['zap_skysegmentoption']
+                #Unrecognized skysegment option
+                if (zap_skysegmentoption.lower() != 'single') and (zap_skysegmentoption.lower() != 'soto+2016') and (zap_skysegmentoption.lower() != 'custom'):
+                    self.logger.warning("Unknown sky segment option: %s. Proceeding with default sky segment option in kcwi.cfg." % zap_skysegmentoption)
+                    self.action.args.zap_skysegmentoption = None
+                #Custom sky segment option 
+                elif (zap_skysegmentoption.lower() == 'custom'):
+                    self.logger.info("User will supply custom sky segments")
+                    if (skyyaml[ofn].get('zap_customskysegments', None) is not None) and (skyyaml[ofn].get('zap_customskysegments', None) != 'None'):
+                        zap_customskysegments = skyyaml[ofn]['zap_customskysegments']
+                        self.action.args.zap_customskysegments = list(zap_customskysegments)
+                        self.action.args.zap_skysegmentoption = zap_skysegmentoption
+                        self.logger.info("Custom sky segments to be used: %s" % self.action.args.zap_customskysegments)
+                    else:
+                        self.logger.warning("Custom sky segments not found. Proceeding with default sky segment option in kcwi.cfg.")
+                        self.action.args.zap_customskysegments = None
+                        self.action.args.zap_skysegmentoption = None
+                #Single or Soto+2016
+                elif (zap_skysegmentoption.lower() == 'single') or (zap_skysegmentoption.lower() == 'soto+2016'):
+                    self.action.args.zap_skysegmentoption = zap_skysegmentoption
+                    self.logger.info("User requested %s: " % zap_skysegmentoption)
+
+
+            # Continuum filter width for this object
+            if (skyyaml[ofn].get('zap_cfwidth', None) is not None) and (skyyaml[ofn].get('zap_cfwidth', None) != 'None'):
+                    zap_cfwidth = skyyaml[ofn]['zap_cfwidth']
+                    self.action.args.zap_cfwidth = zap_cfwidth
+                    self.logger.info("User supplied a cfwidth: %s " % zap_cfwidth)
+
+            # Does the user want to user want interactive mode here?
+            if (skyyaml[ofn].get('zap_cfwidth', None) is not None) and (skyyaml[ofn].get('zap_cfwidth', None) != 'None') and (skyyaml[ofn].get('zap_cfwidth', None) != False):
+                    self.action.args.zap_interactive = True
+                    self.logger.info("User requests interactive mode for this frame")
+            else:
+                self.action.args.zap_interactive = False
+
+
             #Return the arguments 
             return self.action.args
             
@@ -218,7 +264,7 @@ class MakeMasterSky3D(BaseImg):
 
         if self.config.instrument.skipsky:
             self.logger.warning("Sky subtraction turned off, "
-                                "skipping MakeMasterSky")
+                                "skipping MakeMasterSky3D")
             return False
 
         #Check if user wants to run ZAP
@@ -258,7 +304,12 @@ class MakeMasterSky3D(BaseImg):
         self.action.args.zap_use_faint_cont = False
         self.action.args.zap_faint_cont_x1y1 = None
         self.action.args.zap_faint_cont_x2y2 = None
-        #Check if there is a YAML 
+        self.action.args.zap_skysegmentoption = None
+        self.action.args.zap_customskysegments = None
+        self.action.args.zap_cfwidth = None
+        self.action.args.zap_interactive = None
+        
+        #Check if there is a YAML sky file, parse it if so
         if os.path.exists('sky.yaml'):
             self.action.args.skyyaml = True
             self.skyyaml_parser('sky.yaml')
@@ -336,7 +387,237 @@ class MakeMasterSky3D(BaseImg):
             idx_remove_up = np.where(skyseglist > wavearr[-1])[0]
             idx_remove = np.concatenate((idx_remove_low[1:], idx_remove_up[1:]))
             trimmed_skyseg = np.delete(skyseglist, idx_remove) #the first index is zero; need to keep
-            return trimmed_skyseg.tolist()
+            return trimmed_skyseg.tolist() 
+                   
+        def plot_skystats(self, wavee, cleancubee, noskysubb, skyfnamm, zap_skysegg):
+            #Setting plotting parameters
+            alphan=0.75
+            c_drp, c_zap1, c_zapN, c_ex, c_bspline = 'darkorange', 'deepskyblue', 'royalblue', 'black', 'grey'
+            c_drp_hist, c_zap1_hist, c_zapN_hist, c_ex_hist, c_noskysub = (1.0, 0.549, 0.0, 0.5), (0.0, 0.749, 1.0, 0.5), (65/255, 105/255, 225/255, 0.5) , 'black', 'darkgrey' #(R, G, B, Alpha)
+            axis_stats = np.array(['NOSKYSUB','BSPLINE', 'ZAP'])
+            positions_stats  = np.arange(len(axis_stats)) #np.flip(np.arange(len(axis_stats)))
+            labels_stats = (axis_stats.tolist())
+            marker_avg, marker_med, marker_mod, marker_std, marker_rms = 'x', 'D', '*', 's', 'P'
+            alpha_hist = 0.5
+            hatch_noskysub, hatch_drp, hatch_zap1 = '|','\\', '/',
+            label_noskysub, label_drp, label_zap1 = 'NOSKYSUB','BSPLINE', 'ZAP'
+            # Plot the statistical plots
+            mask='' # Locate or construct quick sky mask
+            if self.action.args.zap_skymask is not None: #science sky mask?
+                mask = fits.getdata(self.action.args.zap_skymask)
+            else: #make a quick sky mask using the entire cube
+                mask_shape = np.sum(scihdu[0].data, axis = 0).shape
+                mask = np.zeros(mask_shape, dtype=int)
+                mask[:, :1], mask[:, -1:] = 1, 1 #x mask the edges to avoid edge effects in the sky model
+                mask[:2, :], mask[-2:, :] = 1, 1 #y mask the edges to avoid edge effects in the sky model
+            allsky = (mask == 0)
+            #Load in and sigma clip the cubes
+            zap1 = sigma_clip(cleancubee, sigma=3).data
+            bsplinepre = sigma_clip(noskysubb, sigma=3).data
+            noskysub = bsplinepre
+            flux_zap1_sky, flux_bsplinepre, flux_bsplinepre = '','',''
+            if (self.action.args.zap_skymask is not None) or (self.action.args.zap_skymask is not None):
+                #Extract mean sky spectrum for each source
+                flux_zap1_sky = np.nanmean(zap1[:,allsky],axis = 1)
+                flux_nosub_sky = np.nanmean(noskysub[:,allsky],axis = 1)
+                flux_bsplinepre = np.nanmean(bsplinepre[:,allsky],axis = 1)
+            else: 
+                #Extract median sky spectrum for each source (since no sky msk was supplied)
+                flux_zap1_sky = np.nanmean(zap1[:,allsky],axis = 1)
+                flux_nosub_sky = np.nanmean(noskysub[:,allsky],axis = 1)
+                flux_bsplinepre = np.nanmean(bsplinepre[:,allsky],axis = 1)
+            # Create sky model based on 2D bspline (pseudo DRP) #
+            x0, y0 = wavee, flux_nosub_sky
+            numsteps = int(1.25*(len(wavee)))
+            x_new = np.linspace(np.min(wavee), np.max(wavee), numsteps)
+            y_new = np.interp(x_new, x0, y0)
+            tck = splrep(x_new, y_new)
+            flux_drp_sky = flux_bsplinepre - splev(wavee, tck)
+            ## Calculate statistical measures of the sky spectra ##
+            #DRP SKY
+            flux_drp_sky_avg = np.average(flux_drp_sky)
+            flux_drp_sky_med = np.median(flux_drp_sky)
+            flux_drp_sky_std = np.std(flux_drp_sky)
+            flux_drp_sky_rms = np.sqrt(np.mean(flux_drp_sky*flux_drp_sky))
+            flux_drp_sky_mod = scistats.mode(flux_drp_sky, axis=None).mode
+            #NOSUB SKY
+            flux_nosub_sky_avg = np.average(flux_nosub_sky)
+            flux_nosub_sky_med = np.median(flux_nosub_sky)
+            flux_nosub_sky_std = np.std(flux_nosub_sky)
+            flux_nosub_sky_rms = np.sqrt(np.mean(flux_nosub_sky*flux_nosub_sky))
+            flux_nosub_sky_mod = scistats.mode(flux_nosub_sky, axis=None).mode
+            #ZAP1 SKY
+            flux_zap1_sky_avg = np.average(flux_zap1_sky)
+            flux_zap1_sky_med = np.median(flux_zap1_sky)
+            flux_zap1_sky_std = np.std(flux_zap1_sky)
+            flux_zap1_sky_rms = np.sqrt(np.mean(flux_zap1_sky*flux_zap1_sky))
+            flux_zap1_sky_mod = scistats.mode(flux_zap1_sky, axis=None).mode
+            flux_zap1_sky_med = np.median(flux_zap1_sky)
+
+            ### DEFINE PLOTTING ###
+            import matplotlib.pyplot as plt
+            plt.close()
+            f, ax  = plt.subplots(figsize=(15,8), ncols=2, nrows=2)
+
+            ### PLOT THE SPECTRA ### 
+            #Sky Spectrum
+            ax[0,0].set_title('Mean Sky Spectrum')
+            ax2 = ax[0,0].twinx()
+            ax2.step(wavee, flux_nosub_sky, c=c_noskysub, alpha=alphan, label='NoSkySub')
+            ax2.set_ylabel(r'Original Sky Flux $[e^{-1}]$')
+            ax[0,0].step([], [], c=c_noskysub, alpha=alphan, label='NoSkySub')
+            ax[0,0].step(wavee, flux_drp_sky, c=c_drp, alpha=alphan, label='BSPLINE')
+            ax[0,0].step(wavee, flux_zap1_sky, c=c_zapN, alpha=alphan, label='ZAP')
+            ax[0,0].set_xlabel(r'Observed Wavelength $[\AA]$')
+            ax[0,0].set_ylabel(r'Flux $[e^{-1}]$')
+            ax[0,0].legend(loc='upper left')
+
+            ### PLOT HISTOGRAMS ###
+            #Sky
+            ax[0,1].set_title('Sky Histogram')
+            ax[0,1].hist(flux_nosub_sky, edgecolor=c_noskysub, color='white',  hatch=hatch_noskysub, alpha=alpha_hist, label='NOSKYSUB')
+            ax[0,1].hist(flux_drp_sky, edgecolor=c_drp, color='white',  hatch=hatch_drp, alpha=alpha_hist, label='BSPLINE')
+            ax[0,1].hist(flux_zap1_sky, edgecolor=c_zap1, color='white',  hatch=hatch_zap1, alpha=alpha_hist, label='ZAP')
+            ax[0,1].set_xlabel(r'Sky Flux $[e^{-}]$')
+            ax[0,1].set_xlim(flux_drp_sky.min(), flux_drp_sky.max())
+            ax[0,1].set_ylabel(r'Number')
+            ax[0,1].set_yscale('log')
+            ax[0,1].legend()
+
+            ### PLOT STATISTICAL METRICS ###
+            # STATS PER WAVELENGTH OF SKY SEGMENT SLICE #
+            #Standard Deviation
+            for i in range(len(zap_skysegg)-1):
+                idx = (obswave >= zap_skysegg[i]) & (obswave <= zap_skysegg[i+1])
+                len_idx = len(wavee[idx])
+                #NOSKYSUB
+                ax[1,0].plot(wavee[idx], np.ones(len_idx)*np.std(flux_nosub_sky[idx]), c=c_noskysub, alpha=alphan,marker=marker_std)
+                ax[1,0].text(np.median(wavee[idx]), np.std(flux_nosub_sky[idx]), '{}'.format(int(np.std(flux_nosub_sky[idx]))))
+                #BSPLINE
+                ax[1,0].plot(wavee[idx], np.ones(len_idx)*np.std(flux_drp_sky[idx]), c=c_drp, alpha=alphan, marker=marker_std)
+                ax[1,0].text(np.median(wavee[idx]), np.std(flux_drp_sky[idx]), '{:.2f}'.format(np.std(flux_drp_sky[idx])))
+                #ZAP
+                ax[1,0].plot(wavee[idx], np.ones(len_idx)*np.std(flux_zap1_sky[idx]), c=c_zap1, alpha=alphan, marker=marker_std)
+                ax[1,0].text(np.median(wavee[idx]), np.std(flux_zap1_sky[idx]), '{:.2f}'.format(np.std(flux_zap1_sky[idx])))
+            ax[1,0].step([],[],c=c_noskysub,label=label_noskysub)
+            ax[1,0].step([],[],c=c_drp,label=label_drp)
+            ax[1,0].step([],[],c=c_zap1,label='ZAP')
+            ax[1,0].set_xlabel(r'Observed Wavelength $[\AA]$')
+            ax[1,0].set_ylabel(r'Standard Deviation [$e^-$]')
+            ax[1,0].set_yscale('log')
+            ax[1,0].legend()
+
+
+            #Sky Spectra
+            #NO SUB SKY
+            ax[1,1].set_title('Sky Statistical Metrics')
+            ax[1,1].set_xticks(positions_stats)
+            ax[1,1].set_xticklabels(labels_stats)
+            ax[0,1].patch.set_facecolor('none')
+            #NoSkySub
+            ax[1,1].scatter(positions_stats[0], flux_nosub_sky_std,c=c_noskysub, marker=marker_std, alpha=alphan)
+            ax[1,1].scatter(positions_stats[0], flux_nosub_sky_rms,c=c_noskysub, marker=marker_rms, alpha=alphan)
+            ax[1,1].scatter(positions_stats[0], flux_nosub_sky_mod,c=c_noskysub, marker=marker_mod, alpha=alphan)
+            ax[1,1].scatter(positions_stats[0], flux_nosub_sky_med,c=c_noskysub, marker=marker_med, alpha=alphan)
+            ax[1,1].scatter(positions_stats[0], flux_nosub_sky_avg,c=c_noskysub, marker=marker_avg, alpha=alphan)
+            #DRP SKY
+            ax[1,1].scatter(positions_stats[1], flux_drp_sky_std, c=c_drp, marker=marker_std, alpha=alphan)
+            ax[1,1].scatter(positions_stats[1], flux_drp_sky_rms, c=c_drp, marker=marker_rms, alpha=alphan)
+            ax[1,1].scatter(positions_stats[1], flux_drp_sky_avg, c=c_drp, marker=marker_avg, alpha=alphan)
+            ax[1,1].scatter(positions_stats[1], flux_drp_sky_med, c=c_drp, marker=marker_med, alpha=alphan)
+            ax[1,1].scatter(positions_stats[1], flux_drp_sky_mod, c=c_drp, marker=marker_mod, alpha=alphan)
+            #ZAP1 SKY
+            ax[1,1].scatter(positions_stats[2], flux_zap1_sky_std, c=c_zap1, marker=marker_std, alpha=alphan)
+            ax[1,1].scatter(positions_stats[2], flux_zap1_sky_rms, c=c_zap1, marker=marker_rms, alpha=alphan)
+            ax[1,1].scatter(positions_stats[2], flux_zap1_sky_avg, c=c_zap1, marker=marker_avg, alpha=alphan)
+            ax[1,1].scatter(positions_stats[2], flux_zap1_sky_med, c=c_zap1, marker=marker_med, alpha=alphan)
+            ax[1,1].scatter(positions_stats[2], flux_zap1_sky_mod, c=c_zap1, marker=marker_mod, alpha=alphan)
+            #Tidy up
+            ax[1,1].scatter([],[],marker=marker_std, c=c_ex, label='StanDev')
+            ax[1,1].scatter([],[],marker=marker_rms, c=c_ex, label='RMS')
+            ax[1,1].scatter([],[],marker=marker_avg, c=c_ex, label='Average')
+            ax[1,1].scatter([],[],marker=marker_med, c=c_ex, label='Median')
+            ax[1,1].scatter([],[],marker=marker_mod, c=c_ex, label='Mode')
+            ax[1,1].set_xlabel('')
+            ax[1,1].set_ylabel(r'Sky Statistics $[e^{-}]$')
+            ax[1,1].set_yscale('log')
+            ax[1,1].legend()
+
+            #Fix up spacing and save
+            pngpathh = skyfnamm+'.png'
+            #f.tight_layout()
+            f.savefig(pngpathh, dpi=300, bbox_inches='tight')
+            return pngpathh, flux_zap1_sky_std
+        
+        def plotvarcurves(zobjs,skyvarfnn):
+            import matplotlib.pyplot as plt
+            nseg = len(zobjs.models)
+            fig, axes = plt.subplots(nseg, 3, figsize=(16, nseg * 2),
+                                 tight_layout=True)
+            if nseg==1:
+                i=0
+                var = zobjs.models[i].explained_variance_
+                #compute derivative function
+                arr, nsigma = var, 5
+                npix = int(0.25 * arr.shape[0])
+                deriv = np.diff(arr[:npix])
+                ind = int(.15 * deriv.size)
+                mn1 = deriv[ind:].mean()
+                std1 = deriv[ind:].std() * nsigma
+                #Variance
+                ax1, ax2, ax3 = axes
+                ax1.plot(var, linewidth=3)
+                ax1.plot([zobjs.nevals[i], zobjs.nevals[i]], [min(var), max(var)])
+                ax1.set_ylabel('Variance')
+                #dVariance/dn
+                ax2.plot(np.arange(deriv.size), deriv)
+                ax2.hlines([mn1, mn1 - std1], 0, len(deriv), colors=('k', '0.5'))
+                ax2.plot([zobjs.nevals[i] - 1, zobjs.nevals[i] - 1],
+                        [min(deriv), max(deriv)])
+                ax2.set_ylabel('d/dn Var')
+                #d2Var/dn2
+                deriv2 = np.diff(deriv)
+                ax3.plot(np.arange(deriv2.size), np.abs(deriv2))
+                ax3.plot([zobjs.nevals[i] - 2, zobjs.nevals[i] - 2],
+                        [min(deriv2), max(deriv2)])
+                ax3.set_ylabel('(d^2/dn^2) Var')
+                # ax3.set_xlabel('Number of Components')
+                ax1.set_title('Segment {0}, {1} - {2} Angstroms'.format(
+                    i, zobjs.lranges[i][0], zobjs.lranges[i][1]))
+            else:
+                for i in range(nseg):
+                    var = zobjs.models[i].explained_variance_
+                    #compute derivative function
+                    arr, nsigma = var, 5
+                    npix = int(0.25 * arr.shape[0])
+                    deriv = np.diff(arr[:npix])
+                    ind = int(.15 * deriv.size)
+                    mn1 = deriv[ind:].mean()
+                    std1 = deriv[ind:].std() * nsigma
+                    #Variance
+                    ax1, ax2, ax3 = axes[i]
+                    ax1.plot(var, linewidth=3)
+                    ax1.plot([zobjs.nevals[i], zobjs.nevals[i]], [min(var), max(var)])
+                    ax1.set_ylabel('Variance')
+                    #dVariance/dn
+                    ax2.plot(np.arange(deriv.size), deriv)
+                    ax2.hlines([mn1, mn1 - std1], 0, len(deriv), colors=('k', '0.5'))
+                    ax2.plot([zobjs.nevals[i] - 1, zobjs.nevals[i] - 1],
+                            [min(deriv), max(deriv)])
+                    ax2.set_ylabel('d/dn Var')
+                    #d2Var/dn2
+                    deriv2 = np.diff(deriv)
+                    ax3.plot(np.arange(deriv2.size), np.abs(deriv2))
+                    ax3.plot([zobjs.nevals[i] - 2, zobjs.nevals[i] - 2],
+                            [min(deriv2), max(deriv2)])
+                    ax3.set_ylabel('(d^2/dn^2) Var')
+                    # ax3.set_xlabel('Number of Components')
+                    ax1.set_title('Segment {0}, {1} - {2} Angstroms'.format(
+                        i, zobjs.lranges[i][0], zobjs.lranges[i][1]))
+            fig.tight_layout()
+            pngvarpath = skyvarfnn+'.png'
+            fig.savefig(pngvarpath, dpi=300, bbox_inches='tight')
+            return input('Next:')
 
 
         ### LOAD *icube.fits FILE, CROP IT SPECTRALLY, REPLACE NANS, SAVE AS *icube_cropped.fits ###
@@ -347,6 +628,17 @@ class MakeMasterSky3D(BaseImg):
         scihdu = crop_cube(scihdu_notrim) #Reduce zaxis to WAVGOOD0/1
         scihdr = scihdu[0].header
         obswave = (np.arange(scihdr['NAXIS3']) + 1 - scihdr['CRPIX3']) * scihdr['CD3_3'] + scihdr['CRVAL3']
+        # Save the non-sky subtracted cube
+        if getattr(self.action.args.ccddata, "noskysub", None) is None:
+            noskysub = scihdu[0].data
+            self.action.args.ccddata.noskysub = scihdu[0].data # store NON-SKY subtracted image
+            kcwi_fits_writer(self.action.args.ccddata,
+                table=self.action.args.table,
+                output_file=self.action.args.name,
+                output_dir=self.config.instrument.output_directory,
+                suffix="icube")
+        else:
+            noskysubhdr = scihdu['NOSKYSUB'].data
 
         #replace the edge pixels with NaNs
         badpix = np.where(np.mean(scihdu['FLAGS'].data, axis = 0) > 100)
@@ -376,7 +668,7 @@ class MakeMasterSky3D(BaseImg):
             hdulist = fits.HDUList([wlhdu, mhdu])
             hdulist.writeto(os.path.join(rdir, strip_fname(ofn_full) + '_icube_zapwlimg.fits'), overwrite = True)
         
-
+        
         ### HANDLE SKY MASKS AND OFF-SKY FRAMES ##
         #Does the user have a skyfile to specify sky subtraction parameters?
         if (self.action.args.skyyaml is not None) or (self.action.args.stdfile is not None):
@@ -392,11 +684,11 @@ class MakeMasterSky3D(BaseImg):
             #Is automated continuum masking being requested?
             elif (self.action.args.zap_use_auto_cont == True) or (self.action.args.stdfile is not None):
                 if self.action.args.stdfile is not None:
-                    self.logger.info("Processing standard star, finding bright continuum source automatically")    
+                    self.logger.info("Processing standard star, finding bright continuum source automatically")
                 else:
                     self.logger.info("Finding bright continuum source automatically")
                 scihdu[0].header['ZAPAUTOMASK'] = True
-                fnautomask = os.path.join(rdir, strip_fname(ofn_full) + '_icube_zapskmaskauto.fits')
+                fnautomask = os.path.join(rdir, strip_fname(ofn_full) + '_icube_zapsmskauto.fits')
                 self.action.args.zap_skymask = fnautomask
                 #Generate initial guesses for the 2D Gaussian fit to find the continuum source and generate the ZAP sky mask
                 wl = np.sum(scihdu[0].data, axis = 0) #make whitelight image 
@@ -434,6 +726,8 @@ class MakeMasterSky3D(BaseImg):
                 fnfaintskymaskzap = os.path.join(rdir, strip_fname(ofn_full) + '_icube_zapsmskfaint.fits')
                 faintskymaskzaparr = np.zeros(mask_shape, dtype=int)
                 faintskymaskzaparr[y1:y2, x1:x2] = 1
+                faintskymaskzaparr[:, :1], faintskymaskzaparr[:, -1:] = 1, 1 #x mask the edges to avoid edge effects in the sky model
+                faintskymaskzaparr[:2, :], faintskymaskzaparr[-2:, :] = 1, 1 #y mask the edges to avoid edge effects in the sky model
                 faintskymaskzap = fits.PrimaryHDU(faintskymaskzaparr, header = hdr2d)
                 faintskymaskzap.writeto(fnfaintskymaskzap, overwrite = True)
                 scihdu[0].header['ZAPFAINTMASK'] = True
@@ -491,23 +785,48 @@ class MakeMasterSky3D(BaseImg):
 
         ### ESTABLISH SKY SEGMENTS FOR ZAP ###
         skyseg0 = []
-        if self.config.instrument.zap_skysegmentoption == 'single': #Single segment using "WAVEGOOD" bounds of the cube
+        zap_skysegmentoption = self.config.instrument.zap_skysegmentoption #Default to system config
+        #Did the user define a sky segment option in the sky.yaml file?
+        if self.action.args.zap_skysegmentoption is not None:
+            zap_skysegmentoption = self.action.args.zap_skysegmentoption
+            self.logger.info("# Frame specific skysegment option chosen #")
+        ## Setting sky segment based on provided info ##
+        # Single segment using "WAVEGOOD" bounds of the cube
+        if zap_skysegmentoption.lower() == 'single': 
             skyseg0 = [obswave[0], obswave[-1]]
             self.logger.info("# Using single sky segment. #")
-        elif self.config.instrument.zap_skysegmentoption == 'Soto+2016': #Use the sky segment from the old version of MUSE. See Table 1 in Soto+16 for details
-            skyseg0 = [0, 5400, 5850, 6440, 6750, 7200, 7700, 8265, 8602, 8731, 9275, 10000] 
+        #Using Sky Segments from Table 1 in Soto+16 (see paper for details) 
+        elif zap_skysegmentoption.lower() == 'soto+2016':
+            skyseg0 = [0, 5400, 5850, 6440, 6750, 7200, 7700, 8265, 8602, 8731, 9275, 10000]
             self.logger.info("# Using sky segments defined by Soto+2016. #")
-        elif self.config.instrument.zap_skysegmentoption == 'custom': #User defined sky segments
-            skyseg0 = self.config.instrument.zap_customskysegments  
-            self.logger.info("# Using custom sky segments. #")
+        #User defined sky segments
+        elif zap_skysegmentoption.lower() == 'custom':
+            skyseg0 = self.config.instrument.zap_customskysegments #Default to system configuration
+            if self.action.args.zap_customskysegments is not None: #Did the user define custom sky segments 
+                skyseg0 = self.action.args.zap_customskysegments
+                self.logger.info("# Frame specific custom segments supplied #")
+            if not isinstance(skyseg0, (list, np.ndarray)):
+                self.logger.warning("# Custom segment supplied not a list or array: %s  #" % skyseg0)
+                skyseg0 = [obswave[0], obswave[-1]]
+                self.logger.warning("# Using single sky segment instead. #")
+            else:
+                self.logger.info("# Using custom sky segments #")
         else: #Unknown option given
             skyseg0 = [obswave[0], obswave[-1]] #uses the "WAVEGOOD" bounds of the cube 
             self.logger.info("# Unknown option given for skysegment. Using a single sky segment. #")
         zap_skyseg = trim_skysegments(skyseg0, obswave) #remove sky segements that fall outside of the spectral region in case ZAP runs into problem
-        zap_cfwidth = self.config.instrument.zap_cfwidth #cfwidth = 300, default setting of ZAP
-        if zap_cfwidth is None:
+        #continuum filter width 
+        zap_cfwidth = self.config.instrument.zap_cfwidth # 300 is default
+        if self.action.args.zap_cfwidth is not None: #If user specified a width for this file
+            zap_cfwidth = int(self.action.args.zap_cfwidth)
+            self.logger.info("# Frame specific cfwidth supplied #")
+        if (zap_cfwidth is not None) and (str(zap_cfwidth).lower() != 'none'): #Maing sure the user did not specify a frame specific cfwidth
+            if (zap_cfwidth > 0.5*(obswave.max() - obswave.min())): #Is the width more than half the wavelength range?
+                zap_cfwidth = int(0.5*(obswave.max() - obswave.min())) #if so, set it to be half
+                self.logger.warning("Default or chosen width is larger than the wavelength range. It is now set to 1/2 of Deltalambda: %s. To change this setting, specify cfwidth in the sky.yaml file for this object" % zap_cfwidth)
+        else:
             zap_cfwidth = 300
-            self.config.instrument.zap_cfwidth = zap_cfwidth
+            self.logger.info("# Using default cfwidth as none was supplied")
         self.logger.info("# Using cfwidth= %s and sky segments at %s Angstroms #" % (zap_cfwidth, zap_skyseg))
 
         #Clunky but write out the file
@@ -516,8 +835,8 @@ class MakeMasterSky3D(BaseImg):
         self.action.args.ccddata.uncertainty = scihdu['UNCERT'].data
         self.action.args.ccddata.mask = scihdu['MASK'].data
         self.action.args.ccddata.flags = scihdu['FLAGS'].data
-        if self.action.args.ccddata.noskysub is not None:
-            self.action.args.ccddata.noskysub = scihdu['NOSKYSUB'].data
+        if getattr(self.action.args.ccddata, "prezap", None) is None:
+            self.action.args.ccddata.prezap = scihdu[0].data # store cube to be used by ZAP
         kcwi_fits_writer(self.action.args.ccddata,
             table=self.action.args.table,
             output_file=self.action.args.name,
@@ -532,6 +851,7 @@ class MakeMasterSky3D(BaseImg):
         SKYSEG[:] = zap_skyseg
         # Are we running ZAP on science frame or sky frame?
         zap_time_start = time.perf_counter()
+        zobj = ''
         if self.action.args.offsky is not None: #Run ZAP using using seperate sky frame to generate sky model
             self.logger.info("-----##### RUNNING ZAP USING OFF FIELD SKY #####-----")
             icube_forzap = os.path.join(rdir, strip_fname(ofn_full) + '_icube.fits')
@@ -546,12 +866,10 @@ class MakeMasterSky3D(BaseImg):
         zap_time_end = time.perf_counter()
         self.logger.info("-----##### ZAP complete after {:.2f} seconds #####-----".format(zap_time_end - zap_time_start))
 
-
         ### SIGMA CLIP SKY CUBE ###
         nsig = 3
         skycube0 = zobj.cube - zobj.cleancube #residuls between the inpout cube and the ZAP cleaned cube.
         skycube = skycube0.copy()
-
         mask = maskflags #get the mask to avoid the edge pixel. Should be similar if using the off-field sky
         use = np.abs(mask - 1) > 1e-6 #mask = 1 for edge mask
         skycube[:,~use] = np.nan
@@ -562,16 +880,234 @@ class MakeMasterSky3D(BaseImg):
         skycube[:, ~use] = skycube0[:, ~use]
         cleancube = zobj.cube - skycube
 
+        ### PLOT RESULTS ###
+        if self.config.instrument.plot_level >= 1:
+            skyfnam = "plots/zapsky_%05d_%s_%s_%s" % \
+                     (self.action.args.ccddata.header['FRAMENO'],
+                      self.action.args.illum, self.action.args.grating,
+                      self.action.args.ifuname)
+            p = figure(
+                plot_width=self.config.instrument.plot_width,
+                plot_height=self.config.instrument.plot_height)
+            pngpath, standev = plot_skystats(self, wavee=obswave, cleancubee=cleancube, noskysubb=noskysub, skyfnamm=skyfnam, zap_skysegg=zap_skyseg)
+            p.image_url(url=[pngpath], x=0, y=0, w=1, h=1, anchor="bottom_left")
+            bokeh_plot(p, self.context.bokeh_session)
+            if self.config.instrument.plot_level >= 2:
+                input("Next? <cr>: ")
+            else:
+                time.sleep(self.config.instrument.plot_pause)
+            #save_plot(p, filename=skyfnam+".png")
+
+        ### INTERACTIVELY RUN ZAP REQUESTED ###
+        if (self.config.instrument.zap_interactive == True) or (self.action.args.zap_interactive == True):
+            iteration=0
+            done = False
+            self.logger.info('Iteratively Running ZAP:')
+            n, tmp_stats, tmp_neigenvals, tmp_skysegs, tmp_skymask, tmp_cfwidth = 0, [], [], [], [], []
+            while not done:
+                #Plotting the sky diagnostics plot
+                skyfnam = "zapsky_iteration-%s_%05d_%s_%s_%s" % \
+                     (iteration,
+                      self.action.args.ccddata.header['FRAMENO'],
+                      self.action.args.illum, self.action.args.grating,
+                      self.action.args.ifuname)
+                pngpath, standev = plot_skystats(self, wavee=obswave, cleancubee=cleancube, noskysubb=noskysub, skyfnamm=skyfnam, zap_skysegg=zap_skyseg)
+                p.image_url(url=[pngpath], x=0, y=0, w=1, h=1, anchor="bottom_left")
+                bokeh_plot(p, self.context.bokeh_session)
+                input("Next? <cr>: ")
+
+                #Plotting the variance curves used to determine number of eigenspectra to be used
+                skyfnamvar = "zapsky_variancecurves_iteration-%s_%05d_%s_%s_%s" % \
+                     (iteration,
+                      self.action.args.ccddata.header['FRAMENO'],
+                      self.action.args.illum, self.action.args.grating,
+                      self.action.args.ifuname)
+                pvarpath = plotvarcurves(zobj, skyfnamvar)
+                p.image_url(url=[pvarpath], x=0, y=0, w=1, h=1, anchor="bottom_left")
+                bokeh_plot(p, self.context.bokeh_session)
+                input("Next? <cr>: ")
+
+                # Collect then print current/previous iterations statistics
+                tmp_neigenvals.append(zobj.nevals)
+                tmp_stats.append(standev)
+                tmp_cfwidth.append(zap_cfwidth)
+                if self.action.args.zap_offsky_mask is not None:
+                    tmp_skymask.append(self.args.skymask)
+                elif self.action.args.zap_skymask is not None:
+                    tmp_skymask.append(self.action.args.zap_skymask)
+                else:
+                    tmp_skymask.append(None)
+                curr_skyseg = []
+                nseg = len(zobj.models)
+                for y in range(nseg):
+                    curr_skyseg.append(zobj.lranges[y][0])
+                    curr_skyseg.append(zobj.lranges[y][1])
+                tmp_skysegs.append([curr_skyseg])
+
+
+                #Plot standard deviation for all runs up to this point
+                for z in range(len(tmp_stats)):
+                    self.logger.info("Iteraton= %s, standev of sky spec: %s, cfwidth: %s, skymask: %s, neigenvals: %s, skysegments: %s" % (z, tmp_stats[z], tmp_cfwidth[z], tmp_skymask[z], tmp_neigenvals[z], tmp_skysegs[z]))
+                stage = input("What would you like to modify? (Neigenvals, skysegments, skymask, cfwidth, or none/Enter):")
+
+                #Now ask the user what/if they want to change anything                
+                if (len(stage) <=0) or ('none' in stage.lower()):
+                    self.logger.info('User does not want to make a change. Moving on')
+                    done = True
+                
+                # User wants to change the number of eigenvalues used
+                elif 'neigenval' in stage.lower():
+                    self.logger.info('Current number of eigenvalues used per sky segment: %s' % zobj.nevals)
+                    nunevals = list(input("Please enter a list of the number of eigenspectra values that you would like to use (seperate by commas i.e., 1,2,3,4,5): ").split(','))
+                    nunevals = [int(x) for x in nunevals]
+                    self.logger.info("# Reprocessing file with new number of eigenvalues: %s #" % nunevals)
+                    zobj.reprocess(nevals=nunevals)
+                    zap_time_start = time.perf_counter()
+                    rerunzap = True
+                    #Rerun ZAP with new nevals 
+                    if self.action.args.offsky is not None: #Run ZAP using using seperate sky frame to generate sky model
+                        self.logger.info("-----##### RUNNING ZAP USING OFF FIELD SKY W/ NEW NEIGENVALUES #####-----")
+                        icube_forzap = os.path.join(rdir, strip_fname(ofn_full) + '_icube.fits')
+                        off_skymask_forzap = self.action.args.zap_offsky_mask
+                        extSVD = zap.SVDoutput(self.action.args.offsky, mask = off_skymask_forzap, ncpu=ncpus, zlevel = 'median')
+                        zobj = zap.process(icube_forzap, nevals=nunevals, interactive = True, cfwidthSP = zap_cfwidth, cfwidthSVD = zap_cfwidth, ncpu=ncpus, extSVD=extSVD)
+                    else: #Run on the single science frame 
+                        self.logger.info("-----##### RUNNING ZAP USING IN FIELD SKY W/ NEW NEIGENVALUES #####-----")
+                        icube_forzap = os.path.join(rdir, strip_fname(ofn_full) + '_icube.fits')
+                        skymask_forzap = self.action.args.zap_skymask
+                        zobj = zap.process(icube_forzap, nevals=nunevals, mask = skymask_forzap, interactive = True, cfwidthSP = zap_cfwidth, cfwidthSVD = zap_cfwidth, ncpu=ncpus, zlevel = 'median')
+                    zap_time_end = time.perf_counter()
+                    self.logger.info("-----##### ZAP complete after {:.2f} seconds #####-----".format(zap_time_end - zap_time_start))
+                
+                #User wants to change the sky segments
+                elif 'skysegment' in stage.lower():
+                    rerunzap = False
+                    tmp_skyseg0 = ''
+                    segtype = input("Please enter the sky segment you want to use? (single, custom, or soto+2016): ")
+                    #Single component
+                    if 'single' in segtype.lower():
+                        self.logger.info('User will use a single sky segment')
+                        tmp_skyseg0 = [obswave[0], obswave[-1]]
+                        rerunzap = True
+                    # Soto+2016
+                    elif 'soto+2016' in segtype.lower():
+                        self.logger.info('User requested sky segments from Soto+2016')
+                        tmp_skyseg0 = [0, 5400, 5850, 6440, 6750, 7200, 7700, 8265, 8602, 8731, 9275, 10000]
+                        rerunzap = True
+                    #Custom segments 
+                    elif 'custom' in segtype.lower():
+                        self.logger.info('User will supply custom sky segments')
+                        tmp_skyseg0input = list(input("Enter the sky segments as a comma seperate list with no quotes (0,5400,5850): ").split(','))
+                        tmp_skyseg0 = [int(x) for x in tmp_skyseg0input]
+                        if isinstance(tmp_skyseg0, list):
+                            self.logger.info('Supplied custom segments: %s' % tmp_skyseg0)
+                            rerunzap = True
+                        else:
+                            self.logger.warning('Supplied custom segments not a list. please try again a comma seperate list with no quotes (0,5400,5850)')
+                    else:
+                        self.logger.warning('Sky segment option not recognized. Try again (single, soto+2016, custom). Rerunning with same sky:')
+                    #Should we rerun ZAP?
+                    if rerunzap:
+                        tmp_skyseg = trim_skysegments(tmp_skyseg0, obswave)
+                        SKYSEG[:] = tmp_skyseg
+                        zap_skyseg = tmp_skyseg
+                        self.logger.info("# Reprocessing file with new sky segment. #")
+                        #Rerun ZAP with new sky segments
+                        if self.action.args.offsky is not None: #Run ZAP using using seperate sky frame to generate sky model
+                            self.logger.info("-----##### RUNNING ZAP USING OFF FIELD SKY W/ NEW SKY SEGMENT(S) #####-----")
+                            icube_forzap = os.path.join(rdir, strip_fname(ofn_full) + '_icube.fits')
+                            off_skymask_forzap = self.action.args.zap_offsky_mask
+                            extSVD = zap.SVDoutput(self.action.args.offsky, mask = off_skymask_forzap, ncpu=ncpus, zlevel = 'median')
+                            zobj = zap.process(icube_forzap, interactive = True, cfwidthSP = zap_cfwidth, cfwidthSVD = zap_cfwidth, ncpu=ncpus, extSVD=extSVD)
+                        else: #Run on the single science frame 
+                            self.logger.info("-----##### RUNNING ZAP USING IN FIELD SKY W/ NEW SKY SEGMENT(S) #####-----")
+                            icube_forzap = os.path.join(rdir, strip_fname(ofn_full) + '_icube.fits')
+                            skymask_forzap = self.action.args.zap_skymask
+                            zobj = zap.process(icube_forzap, mask = skymask_forzap, interactive = True, cfwidthSP = zap_cfwidth, cfwidthSVD = zap_cfwidth, ncpu=ncpus, zlevel = 'median')
+                        zap_time_end = time.perf_counter()
+                        self.logger.info("-----##### ZAP complete after {:.2f} seconds #####-----".format(zap_time_end - zap_time_start))
+                    else:
+                        self.logger.warning("No useable sky segments supplied, will not run ZAP. Try again")
+
+                #User wants to supply a mask
+                elif 'skymask' in stage.lower():
+                    rereunzap=False
+                    pathmask = input('Please enter path to *icube_zapsmsk.fits file: ')
+                    if os.path.exists(pathmask):
+                        self.logger.info("# Will reprocess frame using supplied skymask: %s " % pathmask)
+                        rereunzap=True
+                    else:
+                        self.logger.warning("Supplied mask does not exits: %s" % pathmask)
+                    if rereunzap:
+                        #Rerun ZAP with new nevals
+                        new_skymask = pathmask
+                        #Run ZAP with newly supplied mask
+                        if self.action.args.offsky is not None: #Run ZAP using using seperate sky frame to generate sky model
+                            self.logger.info("!!! Applying supplied mask to the OFFSKY FRAME. To apply this mask to the current frame for in field sky,\
+                                             use the appropriate sky.yaml keywords and rerun the DRP for this frame. !!!")
+                            self.logger.info("-----##### RUNNING ZAP USING OFF FIELD SKY W/ NEW MASK #####-----")
+                            self.action.args.zap_offsky_mask = new_skymask
+                            icube_forzap = os.path.join(rdir, strip_fname(ofn_full) + '_icube.fits')
+                            extSVD = zap.SVDoutput(self.action.args.offsky, mask = new_skymask, ncpu=ncpus, zlevel = 'median')
+                            zobj = zap.process(icube_forzap, interactive = True, cfwidthSP = zap_cfwidth, cfwidthSVD = zap_cfwidth, ncpu=ncpus, extSVD=extSVD)
+                        else: #Run on the single science frame 
+                            self.logger.info("-----##### RUNNING ZAP USING IN FIELD SKY W/ NEW MASK #####-----")
+                            self.action.args.zap_skymask = new_skymask
+                            icube_forzap = os.path.join(rdir, strip_fname(ofn_full) + '_icube.fits')
+                            zobj = zap.process(icube_forzap, mask = new_skymask, interactive = True, cfwidthSP = zap_cfwidth, cfwidthSVD = zap_cfwidth, ncpu=ncpus, zlevel = 'median')
+                        zap_time_end = time.perf_counter()
+                        self.logger.info("-----##### ZAP complete after {:.2f} seconds #####-----".format(zap_time_end - zap_time_start))
+                
+                #User wants to change the cfwidth
+                elif 'cfwidth' in stage.lower():
+                    self.logger.info('Current cfwidth: %s' % zap_cfwidth)
+                    zap_cfwidth = int(input("Please enter a new cfwidth (integer): "))
+                    self.logger.info("# Reprocessing frame with new cfwidth: %s #" % zap_cfwidth)
+                    zap_time_start = time.perf_counter()
+                    rerunzap = True
+                    #Rerun ZAP with new nevals 
+                    if self.action.args.offsky is not None: #Run ZAP using using seperate sky frame to generate sky model
+                        self.logger.info("-----##### RUNNING ZAP USING OFF FIELD SKY W/ NEW CFWIDTH #####-----")
+                        icube_forzap = os.path.join(rdir, strip_fname(ofn_full) + '_icube.fits')
+                        off_skymask_forzap = self.action.args.zap_offsky_mask
+                        extSVD = zap.SVDoutput(self.action.args.offsky, mask = off_skymask_forzap, ncpu=ncpus, zlevel = 'median')
+                        zobj = zap.process(icube_forzap, interactive = True, cfwidthSP = zap_cfwidth, cfwidthSVD = zap_cfwidth, ncpu=ncpus, extSVD=extSVD)
+                    else: #Run on the single science frame 
+                        self.logger.info("-----##### RUNNING ZAP USING IN FIELD SKY W/ NEW CFWIDTH #####-----")
+                        icube_forzap = os.path.join(rdir, strip_fname(ofn_full) + '_icube.fits')
+                        skymask_forzap = self.action.args.zap_skymask
+                        zobj = zap.process(icube_forzap, mask = skymask_forzap, interactive = True, cfwidthSP = zap_cfwidth, cfwidthSVD = zap_cfwidth, ncpu=ncpus, zlevel = 'median')
+                    zap_time_end = time.perf_counter()
+                    self.logger.info("-----##### ZAP complete after {:.2f} seconds #####-----".format(zap_time_end - zap_time_start))
+
+                #Check to see if the cube was ZAPPED again then remake the sky spectrum 
+                if rerunzap:
+                    nsig = 3
+                    skycube0 = zobj.cube - zobj.cleancube #residuls between the inpout cube and the ZAP cleaned cube.
+                    skycube = skycube0.copy()
+                    mask = maskflags #get the mask to avoid the edge pixel. Should be similar if using the off-field sky
+                    use = np.abs(mask - 1) > 1e-6 #mask = 1 for edge mask
+                    skycube[:,~use] = np.nan
+                    skycube_clipped = sigma_clip(skycube, sigma = nsig, axis = (1,2))
+                    median_sky = np.ma.median(skycube_clipped, axis = (1,2)).data
+                    median_cube = median_sky[:, np.newaxis, np.newaxis] * np.ones((1, np.shape(skycube)[1], np.shape(skycube)[2]))
+                    skycube[skycube_clipped.mask] = median_cube[skycube_clipped.mask]
+                    skycube[:, ~use] = skycube0[:, ~use]
+                    cleancube = zobj.cube - skycube
+                iteration+=1
+                #Back to top of the while loop
+            #End interactive loop
+
 
         ### UPDATE SKY SEGMENT HEADERS ### 
         if self.config.instrument.offsky is not None:
-            scihdu[0].header['ZAPSKYFRAME'] = strip_fname(self.config.instrument.offsky)
+            scihdu[0].header['ZAPOFFSKY'] = strip_fname(self.config.instrument.offsky)
         scihdu[0].header['ZAPSEGMODE'] = self.config.instrument.zap_skysegmentoption
         scihdu[0].header['ZAPCWITH'] = zap_cfwidth
         scihdu[0].header['ZAPNSEG'] = len(SKYSEG)-1
         nskyseg = np.arange(len(SKYSEG))
         for k in range(len(SKYSEG)):
-            segstr = 'ZAPSKYSEG{}'.format(k)
+            segstr = 'ZAPSEG{}'.format(k)
             scihdu[0].header[segstr] = SKYSEG[k]
 
         ### SAVE THE FINAL CUBE ###
@@ -597,11 +1133,10 @@ class MakeMasterSky3D(BaseImg):
         self.action.args.ccddata.uncertainty = cleanhdu['UNCERT'].data
         self.action.args.ccddata.mask = cleanhdu['MASK'].data
         self.action.args.ccddata.flags = cleanhdu['FLAGS'].data
-        if self.action.args.ccddata.noskysub is not None:
-            self.action.args.ccddata.noskysub = cleanhdu['NOSKYSUB'].data
         if self.config.instrument.zap_append_sky:
-            self.action.args.ccddata.prezap = cleanhdu['PREZAP'].data
             self.action.args.ccddata.zapskymodel = cleanhdu['ZAPSKYMODEL'].data
+            if getattr(self.action.args.ccddata, "prezap", None) is None: #make sure not to overwrite the original input cube
+                self.action.args.ccddata.prezap = cleanhdu['PREZAP'].data
         #attrname = getattr(self.action.args.ccddata, "UNCERT", None)
         #print('Attribute Name FLAG: {}'.format(attrname))
         #print(cleanhdu.info())
@@ -612,7 +1147,7 @@ class MakeMasterSky3D(BaseImg):
             suffix="icube")
 
         #Update proc table
-        #Show that the file has been processed via ZAP
+        #Show that the file has been processed with ZAP
         self.context.proctab.update_proctab(frame=self.action.args.ccddata,
                                     suffix='icube',
                                     newtype="ZSKY",
@@ -628,7 +1163,5 @@ class MakeMasterSky3D(BaseImg):
         #Update logger info 
         log_string = MakeMasterSky3D.__module__
         self.logger.info(log_string)
-
-        return self.action.args
 
     # END: class MakeMasterSky3D()

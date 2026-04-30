@@ -1256,18 +1256,19 @@ def kcwi_fits_writer(ccddata, table=None, output_file=None, output_dir=None,
         if nskysb.dtype == np.float64:
             logger.debug("Converting NOSKYSUB from 64 bits to 32")
             nskysb = nskysb.astype(np.float32)
-        fits_noskysub = fits.ImageHDU(nskysb, name='NOSKYSUB')
+        
+        fits_noskysub = fits.ImageHDU(nskysb, header=ccddata.header, name='NOSKYSUB')
         # Copy over WCS. Could copy over the entire header if desired
-        keys = ['CTYPE1', 'CTYPE2', 'CTYPE3',
-                'CUNIT1', 'CUNIT2', 'CUNIT3',
-                'CNAME1', 'CNAME2', 'CNAME3',                                 
-                'CRVAL1', 'CRVAL2', 'CRVAL3',                            
-                'CRPIX1', 'CRPIX2', 'CRPIX3',                       
-                'CD1_1', 'CD2_1', 'CD1_2',
-                'CD2_2', 'CD3_3']
-        for k in keys:
-            if k in ccddata.header:
-                fits_noskysub.header[k] = ccddata.header[k]
+        #keys = ['CTYPE1', 'CTYPE2', 'CTYPE3',
+        #        'CUNIT1', 'CUNIT2', 'CUNIT3',
+        #        'CNAME1', 'CNAME2', 'CNAME3',                                 
+        #        'CRVAL1', 'CRVAL2', 'CRVAL3',                            
+        #        'CRPIX1', 'CRPIX2', 'CRPIX3',                       
+        #        'CD1_1', 'CD2_1', 'CD1_2',
+        #        'CD2_2', 'CD3_3']
+        #for k in keys:
+        #    if k in ccddata.header:
+        #        fits_noskysub.header[k] = ccddata.header[k]
         hdus_to_save.append(fits_noskysub)
     
     # check for prezap icube
@@ -1276,7 +1277,8 @@ def kcwi_fits_writer(ccddata, table=None, output_file=None, output_dir=None,
         if prezap.dtype == np.float64:
             logger.debug("Converting PREZAP from 64 bits to 32")
             prezap = prezap.astype(np.float32)
-        fits_prezap = fits.ImageHDU(prezap, name='PREZAP')
+        fits_prezap = fits.ImageHDU(prezap, header=ccddata.header, name='PREZAP')
+        #fits_prezap.header=ccddata.header
         hdus_to_save.append(fits_prezap)
 
     # check for zap sky model
@@ -1285,7 +1287,8 @@ def kcwi_fits_writer(ccddata, table=None, output_file=None, output_dir=None,
         if zapskymod.dtype == np.float64:
             logger.debug("Converting ZAPSKYMODEL from 64 bits to 32")
             zapskymod = zapskymod.astype(np.float32)
-        fits_zapskymodel = fits.ImageHDU(zapskymod, name='ZAPSKYMODEL')
+        fits_zapskymodel = fits.ImageHDU(zapskymod, header=ccddata.header, name='ZAPSKYMODEL')
+        #fits_zapskymodel.header = ccddata.header
         hdus_to_save.append(fits_zapskymodel)
 
     logger.info(">>> Saving %d hdus to %s" % (len(hdus_to_save), out_file))
