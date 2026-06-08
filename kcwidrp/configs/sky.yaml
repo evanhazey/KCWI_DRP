@@ -1,21 +1,21 @@
 krYYMMDD_XXXXX:
     ### General sky subtraction instructions ###
-    skip: False
-    offsky: 'krYYMMDD_XXXXX' #or ['krYYMMDD_XXXXX', 'krYYMMDD_XXXXX1', 'krYYMMDD_XXXXX2'] for multiple off sky frames
-    offsky_combine_method: 'median' #or 'mean' for multiple off sky masks
+    skip: True or False
+    offsky: krYYMMDD_XXXXX.fits or None
     ### 2D bspline sky subtraction instructions ###
-    skymask: krYYMMDD_XXXXX_smsk.fits
-    use_auto_cont: False
-    use_faint_cont: False
-    faint_cont_source_pos: 10
-    faint_cont_source_width: 0.5
+    skymask: krYYMMDD_XXXXX_smsk.fits or None
+    use_auto_cont: True or False
+    use_faint_cont: True or False
+    faint_cont_source_pos: 10 or None
+    faint_cont_source_width: 0.5 or None
     ### ZAP sky subtraction instructions ###
-    zap_skymask: krYYMMDD_XXXXX_icube_zapskymask.fits
-    zap_offsky_mask: krYYMMDD_XXXXX_icube_zapskymask.fits
+    zap_skymask: krYYMMDD_XXXXX_zapsmsk.fits or None
+    zap_offsky_mask: krYYMMDD_XXXXX_zapsmsk.fits
     zap_use_auto_cont: True of False
     zap_use_faint_cont: True or False
     zap_faint_cont_x1y1: 5,5 or None
     zap_faint_cont_x2y2: 12,12 or None
     zap_skysegmentoption: single or Soto+2016 or custom
-    zap_customskysegments: [0,5000,75000]
+    zap_customskysegments: [5600,6500,75000]
     zap_cfwidth: 300 or None
+    zap_interactive: True or False

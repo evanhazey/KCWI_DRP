@@ -194,8 +194,8 @@ class MakeMasterSky(BaseImg):
             return False
 
         #Check if user wants to run 2D-bspline sky subtraction 
-        if (self.config.instrument.skysubmethod != '2D-bspline') and (self.config.instrument.skysubmethod != '2D-bspline+3D-PCA'):
-            self.logger.warning("User does not want sky subtraction using 2D-bspline, "
+        if (self.config.instrument.skysubmethod != '2D-BSPLINE') and (self.config.instrument.skysubmethod != '2D-BSPLINE+3D-PCA'):
+            self.logger.warning("User does not want sky subtraction using 2D-BSPLINE, "
                                 "skipping MakeMasterSky")
             return False
 

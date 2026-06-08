@@ -70,7 +70,7 @@ class MakeMasterObject(BaseImg):
             method = 'average'
 
         # use provided combine method if specified
-        if (self.config.instrument.object_combine_method is not None) and ((str(self.config.instrument.object_combine_method).lower() != 'done') or (str(self.config.instrument.object_combine_method).lower() != 'default')):
+        if (self.config.instrument.object_combine_method is not None) and ((str(self.config.instrument.object_combine_method).lower() != 'none') or (str(self.config.instrument.object_combine_method).lower() != 'default')):
            if ("average" in self.config.instrument.object_combine_method) or ("median" in self.config.instrument.object_combine_method) or ("sum" in self.config.instrument.object_combine_method):
                self.logger.info(f"User has requested combine method: %s" % (self.config.instrument.object_combine_method))
                method = self.config.instrument.object_combine_method

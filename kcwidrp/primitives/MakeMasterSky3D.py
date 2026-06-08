@@ -4,12 +4,13 @@ from kcwidrp.primitives.kcwi_file_primitives import kcwi_fits_reader, \
 #from kcwidrp.primitives.GetAtlasLines import gaus
 from kcwidrp.core.kcwi_get_std import kcwi_get_std
 from kcwidrp.core.bokeh_plotting import bokeh_plot
-from bokeh.plotting import figure, gridplot, show
+from bokeh.plotting import figure
 from kcwidrp.core.kcwi_plotting import save_plot
 #from kcwidrp.core.bspline import Bspline
-from bokeh.plotting import figure
 from kcwidrp.core.kcwi_pkg_resources import get_resource_path
 import yaml
+from PIL import Image
+
 
 import os
 import time
@@ -219,7 +220,7 @@ class MakeMasterSky3D(BaseImg):
                 #Custom sky segment option 
                 elif (zap_skysegmentoption.lower() == 'custom'):
                     self.logger.info("User will supply custom sky segments")
-                    if (skyyaml[ofn].get('zap_customskysegments', None) is not None) and (skyyaml[ofn].get('zap_customskysegments', None) != 'None'):
+                    if (skyyaml[ofn].get('zap_customskysegments', None) is not None) and (skyyaml[ofn].get('zap_customskysegments', None).lower() != 'none'):
                         zap_customskysegments = skyyaml[ofn]['zap_customskysegments']
                         self.action.args.zap_customskysegments = list(zap_customskysegments)
                         self.action.args.zap_skysegmentoption = zap_skysegmentoption
@@ -241,7 +242,8 @@ class MakeMasterSky3D(BaseImg):
                     self.logger.info("User supplied a cfwidth: %s " % zap_cfwidth)
 
             # Does the user want to user want interactive mode here?
-            if (skyyaml[ofn].get('zap_cfwidth', None) is not None) and (skyyaml[ofn].get('zap_cfwidth', None) != 'None') and (skyyaml[ofn].get('zap_cfwidth', None) != False):
+            if (skyyaml[ofn].get('zap_interactive', None) is not None) and (skyyaml[ofn].get('zap_interactive', None) != 'None'):
+                if (skyyaml[ofn].get('zap_interactive', None) is True) or (skyyaml[ofn].get('zap_interactive', None) == 'True'):
                     self.action.args.zap_interactive = True
                     self.logger.info("User requests interactive mode for this frame")
             else:
@@ -268,7 +270,7 @@ class MakeMasterSky3D(BaseImg):
             return False
 
         #Check if user wants to run ZAP
-        if (self.config.instrument.skysubmethod != '3D-PCA') and (self.config.instrument.skysubmethod != '2D-bspline+3D-PCA'):
+        if (self.config.instrument.skysubmethod != '3D-PCA') and (self.config.instrument.skysubmethod != '2D-BSPLINE+3D-PCA'):
             self.logger.warning("User does not want sky subtraction using ZAP, "
                                 "skipping MakeMasterSky3D")
             return False
@@ -617,8 +619,7 @@ class MakeMasterSky3D(BaseImg):
             fig.tight_layout()
             pngvarpath = skyvarfnn+'.png'
             fig.savefig(pngvarpath, dpi=300, bbox_inches='tight')
-            return input('Next:')
-
+            return pngvarpath
 
         ### LOAD *icube.fits FILE, CROP IT SPECTRALLY, REPLACE NANS, SAVE AS *icube_cropped.fits ###
         ofn_full = self.action.args.name
@@ -649,7 +650,7 @@ class MakeMasterSky3D(BaseImg):
         mhdu = fits.ImageHDU(maskflags, header = hdr2d)
 
         # MAKE WHITELIGHT IMAGE #
-        if self.config.instrument.zap_interactive == True:
+        if (self.config.instrument.zap_interactive == True) or (self.action.args.zap_interactive == True):
             #This below is used to make the white light images that ZAP then uses as a preliminary mask 
             wlimg_wave_range_red = [6380, 7200] #pick this region to generate the white-lighted image because sky lines are much stronger elsewhere. 
             wlimg_wave_range_blue = [3600, 5500] # TODO: Can also make it as an input or variable parameter in the GUI
@@ -762,7 +763,7 @@ class MakeMasterSky3D(BaseImg):
                     scihdu[0].header['ZAPOFFSKYMASK'] = self.action.args.zap_offsky_mask
 
                 #Is interactive mode set?
-                if self.config.instrument.zap_interactive == True:
+                if (self.config.instrument.zap_interactive == True) or (self.action.args.zap_interactive == True):
                     offskywave = (np.arange(skyhdr['NAXIS3']) + 1 - skyhdr['CRPIX3']) * skyhdr['CD3_3'] + skyhdr['CRVAL3']
                     if offskywave[-1] > wlimg_wave_range_red[0]:
                         wlimg_wave_range = wlimg_wave_range_red
@@ -782,6 +783,7 @@ class MakeMasterSky3D(BaseImg):
                     offskymhdu = fits.ImageHDU(offskymask, header = offskyhdr2d)
                     offskyhdulist = fits.HDUList([offskywlhdu, offskymhdu])
                     offskyhdulist.writeto(os.path.join(rdir, strip_fname(self.action.args.offsky) + '_zapwlimg.fits'), overwrite = True)
+
 
         ### ESTABLISH SKY SEGMENTS FOR ZAP ###
         skyseg0 = []
@@ -886,27 +888,29 @@ class MakeMasterSky3D(BaseImg):
                      (self.action.args.ccddata.header['FRAMENO'],
                       self.action.args.illum, self.action.args.grating,
                       self.action.args.ifuname)
-            p = figure(
+            p = figure(x_range=(0, 1), y_range=(0, 1),
                 plot_width=self.config.instrument.plot_width,
                 plot_height=self.config.instrument.plot_height)
             pngpath, standev = plot_skystats(self, wavee=obswave, cleancubee=cleancube, noskysubb=noskysub, skyfnamm=skyfnam, zap_skysegg=zap_skyseg)
-            p.image_url(url=[pngpath], x=0, y=0, w=1, h=1, anchor="bottom_left")
+            full_pngpath = os.path.join(os.getcwd(), pngpath)
+            print(full_pngpath)
+            p.image_url(url=[pngpath], x=0, y=1) #,w=1, h=1, anchor="bottom_left")
             bokeh_plot(p, self.context.bokeh_session)
             if self.config.instrument.plot_level >= 2:
                 input("Next? <cr>: ")
             else:
                 time.sleep(self.config.instrument.plot_pause)
-            #save_plot(p, filename=skyfnam+".png")
 
         ### INTERACTIVELY RUN ZAP REQUESTED ###
         if (self.config.instrument.zap_interactive == True) or (self.action.args.zap_interactive == True):
             iteration=0
             done = False
+            rerunzap=False
             self.logger.info('Iteratively Running ZAP:')
             n, tmp_stats, tmp_neigenvals, tmp_skysegs, tmp_skymask, tmp_cfwidth = 0, [], [], [], [], []
             while not done:
                 #Plotting the sky diagnostics plot
-                skyfnam = "zapsky_iteration-%s_%05d_%s_%s_%s" % \
+                skyfnam = "plots/zapsky_iteration-%s_%05d_%s_%s_%s" % \
                      (iteration,
                       self.action.args.ccddata.header['FRAMENO'],
                       self.action.args.illum, self.action.args.grating,
@@ -914,10 +918,11 @@ class MakeMasterSky3D(BaseImg):
                 pngpath, standev = plot_skystats(self, wavee=obswave, cleancubee=cleancube, noskysubb=noskysub, skyfnamm=skyfnam, zap_skysegg=zap_skyseg)
                 p.image_url(url=[pngpath], x=0, y=0, w=1, h=1, anchor="bottom_left")
                 bokeh_plot(p, self.context.bokeh_session)
+                self.logger.info('Diagnostic plots generated and saved at: %s' % pngpath)
                 input("Next? <cr>: ")
 
                 #Plotting the variance curves used to determine number of eigenspectra to be used
-                skyfnamvar = "zapsky_variancecurves_iteration-%s_%05d_%s_%s_%s" % \
+                skyfnamvar = "plots/zapsky_variancecurves_iteration-%s_%05d_%s_%s_%s" % \
                      (iteration,
                       self.action.args.ccddata.header['FRAMENO'],
                       self.action.args.illum, self.action.args.grating,
@@ -925,6 +930,7 @@ class MakeMasterSky3D(BaseImg):
                 pvarpath = plotvarcurves(zobj, skyfnamvar)
                 p.image_url(url=[pvarpath], x=0, y=0, w=1, h=1, anchor="bottom_left")
                 bokeh_plot(p, self.context.bokeh_session)
+                self.logger.info('Variance diagnostic plots generated and saved at: %s' % pvarpath)
                 input("Next? <cr>: ")
 
                 # Collect then print current/previous iterations statistics
@@ -932,7 +938,7 @@ class MakeMasterSky3D(BaseImg):
                 tmp_stats.append(standev)
                 tmp_cfwidth.append(zap_cfwidth)
                 if self.action.args.zap_offsky_mask is not None:
-                    tmp_skymask.append(self.args.skymask)
+                    tmp_skymask.append(self.action.args.zap_offsky_mask)
                 elif self.action.args.zap_skymask is not None:
                     tmp_skymask.append(self.action.args.zap_skymask)
                 else:
@@ -946,17 +952,19 @@ class MakeMasterSky3D(BaseImg):
 
 
                 #Plot standard deviation for all runs up to this point
+                #Now ask the user what/if they want to change anything
                 for z in range(len(tmp_stats)):
-                    self.logger.info("Iteraton= %s, standev of sky spec: %s, cfwidth: %s, skymask: %s, neigenvals: %s, skysegments: %s" % (z, tmp_stats[z], tmp_cfwidth[z], tmp_skymask[z], tmp_neigenvals[z], tmp_skysegs[z]))
-                stage = input("What would you like to modify? (Neigenvals, skysegments, skymask, cfwidth, or none/Enter):")
+                    self.logger.info("Iteration= %s, standev of sky spec: %s, cfwidth: %s, skymask: %s, neigenvals: %s, skysegments: %s" % (z, tmp_stats[z], tmp_cfwidth[z], tmp_skymask[z], tmp_neigenvals[z], tmp_skysegs[z]))
+                stage = input("What would you like to modify? (skysegments, cfwidth, skymask, Neigenvals, or none/Enter):")
 
-                #Now ask the user what/if they want to change anything                
+                #The ueser does not want to change anything anymore, end the loop
                 if (len(stage) <=0) or ('none' in stage.lower()):
                     self.logger.info('User does not want to make a change. Moving on')
                     done = True
                 
                 # User wants to change the number of eigenvalues used
                 elif 'neigenval' in stage.lower():
+                    self.logger.info('Review the variance diagnostic plots to determine number of eigenvalues to use at: %s' % pvarpath)
                     self.logger.info('Current number of eigenvalues used per sky segment: %s' % zobj.nevals)
                     nunevals = list(input("Please enter a list of the number of eigenspectra values that you would like to use (seperate by commas i.e., 1,2,3,4,5): ").split(','))
                     nunevals = [int(x) for x in nunevals]
@@ -1013,6 +1021,7 @@ class MakeMasterSky3D(BaseImg):
                         zap_skyseg = tmp_skyseg
                         self.logger.info("# Reprocessing file with new sky segment. #")
                         #Rerun ZAP with new sky segments
+                        zap_time_start = time.perf_counter()
                         if self.action.args.offsky is not None: #Run ZAP using using seperate sky frame to generate sky model
                             self.logger.info("-----##### RUNNING ZAP USING OFF FIELD SKY W/ NEW SKY SEGMENT(S) #####-----")
                             icube_forzap = os.path.join(rdir, strip_fname(ofn_full) + '_icube.fits')
@@ -1032,7 +1041,10 @@ class MakeMasterSky3D(BaseImg):
                 #User wants to supply a mask
                 elif 'skymask' in stage.lower():
                     rereunzap=False
-                    pathmask = input('Please enter path to *icube_zapsmsk.fits file: ')
+                    if self.action.args.offsky is not None:
+                        pathmask = input('Please enter path to *_zapsmsk.fits file for off sky frame %s: ' % self.action.args.offsky)
+                    else:   
+                        pathmask = input('Please enter path to a *_zapsmsk.fits file: ')
                     if os.path.exists(pathmask):
                         self.logger.info("# Will reprocess frame using supplied skymask: %s " % pathmask)
                         rereunzap=True
@@ -1042,9 +1054,9 @@ class MakeMasterSky3D(BaseImg):
                         #Rerun ZAP with new nevals
                         new_skymask = pathmask
                         #Run ZAP with newly supplied mask
+                        zap_time_start = time.perf_counter()
                         if self.action.args.offsky is not None: #Run ZAP using using seperate sky frame to generate sky model
-                            self.logger.info("!!! Applying supplied mask to the OFFSKY FRAME. To apply this mask to the current frame for in field sky,\
-                                             use the appropriate sky.yaml keywords and rerun the DRP for this frame. !!!")
+                            self.logger.info("!!! Applying supplied mask to the OFFSKY FRAME. To apply this mask to the current frame for in-field sky, remove the 'offsky' keyword in the sky.yaml. !!!")
                             self.logger.info("-----##### RUNNING ZAP USING OFF FIELD SKY W/ NEW MASK #####-----")
                             self.action.args.zap_offsky_mask = new_skymask
                             icube_forzap = os.path.join(rdir, strip_fname(ofn_full) + '_icube.fits')
